@@ -1,271 +1,457 @@
-require('dotenv').config();
-const Parser = require('rss-parser');
 const axios = require('axios');
-const axiosRetry = require('axios-retry').default;
-const cron = require('node-cron');
-const express = require('express');
-const async = require('async');
-const NodeCache = require('node-cache');
-const winston = require('winston');
-const { createClient } = require('@supabase/supabase-js');
-const config = require('./config');
+const Parser = require('rss-parser');
+const Redis = require('@upstash/redis').Redis;
+const { Octokit } = require('@octokit/rest');
+const { parse } = require('csv-parse/sync');
+const { stringify } = require('csv-stringify/sync');
+require('dotenv').config();
 
-const app = express();
 const parser = new Parser();
-const axiosInstance = axios.create({
-  headers: {
-    'User-Agent':
-      'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-  },
-});
-const cache = new NodeCache({ stdTTL: 300 });
-const port = config.port;
-const discordWebhookUrl = process.env.DISCORD_WEBHOOK_URL;
-const discordNotificationsEnabled = config.discordNotificationsEnabled;
-const maxRetries = config.maxRetries;
-const feedUrls = process.env.FEED_URLS ? process.env.FEED_URLS.split(',') : [];
-
-// Supabase configuration
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
-
-// Configure logger without file transport
-const logger = winston.createLogger({
-  level: 'info',
-  format: winston.format.combine(
-    winston.format.timestamp({
-      format: 'YYYY-MM-DD HH:mm:ss',
-      timezone: 'Asia/Manila',
-    }),
-    winston.format.json()
-  ),
-  transports: [
-    new winston.transports.Console(),
-  ],
+const octokit = new Octokit({
+  auth: process.env.GITHUB_ACCESS_TOKEN,
 });
 
-app.set('trust proxy', 1);
-app.use(express.json());
-
-// Configure axios-retry
-axiosRetry(axiosInstance, {
-  retries: maxRetries,
-  retryDelay: (retryCount) => {
-    return retryCount * config.retryDelay;
-  },
-  retryCondition: (error) => {
-    return (
-      axiosRetry.isNetworkOrIdempotentRequestError(error) ||
-      (error.response && error.response.status >= 500)
-    );
-  },
-  onRetry: (retryCount, error) => {
-    logger.warn(`Retry attempt: ${retryCount}. Error: ${error.message}`);
-  },
+// Create a Redis instance
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
 });
 
-// Divide the feed URLs into batches
-const batchSize = Math.ceil(feedUrls.length / 3);
-const batch1 = feedUrls.slice(0, batchSize);
-const batch2 = feedUrls.slice(batchSize, batchSize * 2);
-const batch3 = feedUrls.slice(batchSize * 2);
+// Function to format the date and time in GMT+8 Manila format
+function formatDateTime(dateString) {
+  const date = new Date(dateString);
+  const options = {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: 'Asia/Manila',
+    timeZoneName: 'short',
+  };
+  const formattedDate = date.toLocaleDateString('en-US', options);
+  const [datePart, timePart] = formattedDate.split(', ');
+  return `${datePart},${timePart}`;
+}
 
-// Function to check feed updates for a batch of URLs
-async function checkFeedUpdates(batch) {
+// Function to sanitize a string for CSV format
+function sanitizeCSV(value) {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  // Remove newline characters
+  value = value.replace(/[\n\r]/g, '');
+
+  // Replace double quotes with two double quotes
+  value = value.replace(/"/g, '""');
+
+  // Replace U+2019 "'" with ASCII character U+0027 "'"
+  value = value.replace(/'/g, "'");
+
+  // Remove any other problematic characters
+  value = value.replace(/[,;\t]/g, '');
+
+  // Remove HTML tags
+  value = value.replace(/<[^>]*>/g, '');
+
+  return value;
+}
+
+// Function to remove tracking parameters from URL
+async function removeTrackingParams(url) {
   try {
-    await async.eachLimit(batch, 5, async (feedUrl) => {
-      try {
-        const cachedFeed = cache.get(feedUrl);
-        if (cachedFeed) {
-          logger.info(`Fetching feed from cache: ${feedUrl}`);
-          await processFeedItems(cachedFeed, feedUrl);
+    // Remove UTM parameters (Google Analytics)
+    url = url.replace(/(\?|&)(utm_\w+=[^&]*)/g, '');
+
+    // Remove Facebook click identifier
+    url = url.replace(/(\?|&)fbclid=[^&]*/g, '');
+
+    // Remove Twitter click identifier
+    url = url.replace(/(\?|&)t=[^&]*/g, '');
+
+    // Remove LinkedIn click identifier
+    url = url.replace(/(\?|&)lipi=[^&]*/g, '');
+
+    // Remove Instagram click identifier
+    url = url.replace(/(\?|&)igshid=[^&]*/g, '');
+
+    // Remove Pinterest click identifier
+    url = url.replace(/(\?|&)pin_\w+=[^&]*/g, '');
+
+    // Remove Reddit click identifier
+    url = url.replace(/(\?|&)ref=\w+/g, '');
+
+    // Remove TikTok click identifier
+    url = url.replace(/(\?|&)_t=[^&]*/g, '');
+
+    // Remove Snapchat click identifier
+    url = url.replace(/(\?|&)sc_[^&]*/g, '');
+
+    // Remove YouTube click identifier
+    url = url.replace(/(\?|&)feature=[^&]*/g, '');
+
+    // Remove trailing question mark or ampersand if present
+    url = url.replace(/[?&]$/, '');
+  } catch (error) {
+    console.error('Error removing tracking parameters from URL:', error);
+    // Send an error notification to Discord webhook
+    await sendErrorNotification(process.env.WEBHOOK_URL, `Error removing tracking parameters from URL: ${error.message}`);
+  }
+
+  return url;
+}
+
+// Function to send a notification to the Discord webhook with rate limit handling
+async function sendDiscordNotification(feed) {
+  const { title, link, isoDate } = feed;
+
+  const embedData = {
+    title: title,
+    url: link,
+    timestamp: new Date().toISOString(),
+    fields: [
+      {
+        name: 'Published Date',
+        value: formatDateTime(isoDate),
+      },
+      {
+        name: 'URL',
+        value: link,
+      },
+    ],
+  };
+
+  const maxRetries = 3;
+  let retries = 0;
+  let globalRateLimited = false;
+
+  while (retries < maxRetries) {
+    try {
+      await axios.post(process.env.WEBHOOK_URL, {
+        embeds: [embedData],
+      });
+      console.log(`Notification sent for: ${title}`);
+      break;
+    } catch (error) {
+      if (error.response && error.response.status === 429) {
+        const retryAfter = error.response.data.retry_after * 1000;
+        const isGlobal = error.response.data.global;
+
+        if (isGlobal) {
+          console.log('Global rate limit hit. Pausing all requests.');
+          globalRateLimited = true;
+          await new Promise((resolve) => setTimeout(resolve, retryAfter));
         } else {
-          logger.info(`Fetching feed from URL: ${feedUrl}`);
-          const feed = await parser.parseURL(feedUrl);
-          cache.set(feedUrl, feed);
-          await processFeedItems(feed, feedUrl);
+          console.log(`Rate limit hit for notification: ${title}. Retrying after ${retryAfter}ms.`);
+          await new Promise((resolve) => setTimeout(resolve, retryAfter));
         }
-      } catch (error) {
-        logger.error(`Error fetching feed from ${feedUrl}: ${error.message}`);
-        await sendDiscordErrorNotification(
-          `Error fetching feed from ${feedUrl}: ${error.message}`,
-          error.stack
-        );
+      } else {
+        console.error('Error sending Discord notification:', error);
+        await sendErrorNotification(process.env.WEBHOOK_URL, `Error sending Discord notification: ${error.message}`);
+        break;
       }
+    }
+
+    retries++;
+  }
+
+  if (retries === maxRetries) {
+    console.error(`Failed to send notification after ${maxRetries} retries: ${title}`);
+    await sendErrorNotification(process.env.WEBHOOK_URL, `Failed to send notification after ${maxRetries} retries: ${title}`);
+  }
+
+  if (globalRateLimited) {
+    console.log('Global rate limit resolved. Resuming requests.');
+  }
+}
+
+// Function to send an error notification to a separate Discord webhook
+async function sendErrorNotification(feedUrl, errorMessage) {
+  const embedData = {
+    title: 'Error Checking Feed',
+    description: `An error occurred while checking the feed: ${feedUrl}`,
+    color: 16711680, // Red color
+    fields: [
+      {
+        name: 'Error Message',
+        value: errorMessage,
+      },
+    ],
+    timestamp: new Date().toISOString(),
+  };
+
+  try {
+    await axios.post(process.env.ERROR_WEBHOOK_URL, {
+      embeds: [embedData],
+    }, {
+      timeout: 5000, // Set a timeout of 5 seconds
     });
+    console.log(`Error notification sent for feed: ${feedUrl}`);
   } catch (error) {
-    logger.error(`Unhandled error in checkFeedUpdates: ${error.message}`);
-    throw error;
+    console.error('Error sending error notification:', error);
   }
 }
 
-// Function to process feed items
-async function processFeedItems(feed, feedUrl) {
-  const startTime = Date.now();
-  let processedItems = 0;
+// Simple queue implementation for sending notifications with a delay
+const notificationQueue = [];
+let isProcessingQueue = false;
+
+async function processNotificationQueue() {
+  if (isProcessingQueue || notificationQueue.length === 0) {
+    return;
+  }
+
+  isProcessingQueue = true;
+
+  while (notificationQueue.length > 0) {
+    const notification = notificationQueue.shift();
+    await sendDiscordNotification(notification);
+    await new Promise((resolve) => setTimeout(resolve, process.env.NOTIFICATION_DELAY));
+  }
+
+  isProcessingQueue = false;
+}
+
+// Function to commit changes to a GitHub repository
+async function commitChangesToRepository(owner, repo, filePath, content, commitMessage) {
+  try {
+    // Check if the repository exists
+    try {
+      await octokit.repos.get({
+        owner,
+        repo,
+      });
+    } catch (error) {
+      if (error.status === 404) {
+        console.error(`Repository ${owner}/${repo} not found. Please create the repository on GitHub.`);
+        await sendErrorNotification(process.env.WEBHOOK_URL, `Repository ${owner}/${repo} not found. Please create the repository on GitHub.`);
+        return;
+      }
+      throw error;
+    }
+
+    let latestCommitSha = null;
+
+    try {
+      const { data: { sha } } = await octokit.repos.getCommit({
+        owner,
+        repo,
+        ref: 'main',
+      });
+      latestCommitSha = sha;
+    } catch (error) {
+      if (error.status !== 404) {
+        throw error;
+      }
+    }
+
+    const { data: { sha: blobSha } } = await octokit.git.createBlob({
+      owner,
+      repo,
+      content,
+      encoding: 'utf-8',
+    });
+
+    const tree = [
+      {
+        path: filePath,
+        mode: '100644',
+        type: 'blob',
+        sha: blobSha,
+      },
+    ];
+
+    if (latestCommitSha) {
+      const { data: { sha: treeSha } } = await octokit.git.createTree({
+        owner,
+        repo,
+        base_tree: latestCommitSha,
+        tree,
+      });
+
+      const { data: { sha: newCommitSha } } = await octokit.git.createCommit({
+        owner,
+        repo,
+        message: commitMessage,
+        tree: treeSha,
+        parents: [latestCommitSha],
+      });
+
+      latestCommitSha = newCommitSha;
+    } else {
+      const { data: { sha: newCommitSha } } = await octokit.git.createCommit({
+        owner,
+        repo,
+        message: commitMessage,
+        tree,
+      });
+
+      latestCommitSha = newCommitSha;
+    }
+
+    await octokit.git.updateRef({
+      owner,
+      repo,
+      ref: 'heads/main',
+      sha: latestCommitSha,
+    });
+
+    console.log('Changes committed successfully!');
+  } catch (error) {
+    console.error('Error committing changes:', error);
+    await sendErrorNotification(process.env.WEBHOOK_URL, `Error committing changes: ${error.message}`);
+  }
+}
+
+// Function to check for new feeds and commit changes to GitHub repository
+async function checkFeeds() {
+  const feeds = process.env.FEEDS.split(',').map((url) => ({ url }));
+  const githubRepo = {
+    owner: process.env.GITHUB_REPO_OWNER,
+    repo: process.env.GITHUB_REPO_NAME,
+    filePath: process.env.GITHUB_REPO_FILE_PATH,
+  };
+
+  for (const feed of feeds) {
+    try {
+      const { url } = feed;
+      const lastCheckedTime = await redis.get(url) || 0;
+
+      const parsedFeed = await retryRequest(() => parser.parseURL(url));
+      const newItems = parsedFeed.items.filter(
+        (item) => new Date(item.isoDate).getTime() > lastCheckedTime
+      );
+
+      if (newItems.length > 0) {
+        console.log(`Found ${newItems.length} new item(s) in feed: ${url}`);
+
+        // Add new items to the notification queue
+        notificationQueue.push(...newItems);
+
+        // Update the last checked time for the feed in Redis
+        await redis.set(url, new Date(parsedFeed.lastBuildDate).getTime());
+
+        // Commit new items to the GitHub repository
+        try {
+          const { data: fileContent } = await octokit.repos.getContent({
+            owner: githubRepo.owner,
+            repo: githubRepo.repo,
+            path: githubRepo.filePath,
+          });
+
+          const decodedContent = Buffer.from(fileContent.content, 'base64').toString('utf-8');
+          const records = parse(decodedContent, { columns: true });
+
+          for (const item of newItems) {
+            const title = item.title || 'No title available';
+            const link = item.link || 'No link available';
+            const isoDate = item.isoDate || new Date().toISOString();
+
+            const [date, time] = formatDateTime(isoDate).split(',');
+            const sanitizedTitle = sanitizeCSV(title);
+            const sanitizedLink = await removeTrackingParams(sanitizeCSV(link));
+
+            records.push({
+              Date: date,
+              Time: time,
+              Title: sanitizedTitle,
+              URL: sanitizedLink,
+            });
+          }
+
+          // Sort the records based on the 'Date' and 'Time' columns in descending order
+          records.sort((a, b) => {
+            if (b.Date === a.Date) {
+              return b.Time.localeCompare(a.Time);
+            }
+            return b.Date.localeCompare(a.Date);
+          });
+
+          const updatedContent = stringify(records, { header: true });
+
+          await commitChangesToRepository(
+            githubRepo.owner,
+            githubRepo.repo,
+            githubRepo.filePath,
+            updatedContent,
+            'Update CSV file with new items'
+          );
+        } catch (error) {
+          if (error.status === 404) {
+            // CSV file doesn't exist, create a new file with headers
+            const headers = ['Date', 'Time', 'Title', 'URL'];
+            const records = await Promise.all(
+              newItems.map(async (item) => {
+                const [date, time] = formatDateTime(item.isoDate || new Date().toISOString()).split(',');
+                return {
+                  Date: date,
+                  Time: time,
+                  Title: sanitizeCSV(item.title || 'No title available'),
+                  URL: await removeTrackingParams(sanitizeCSV(item.link || 'No link available')),
+                };
+              })
+            );
+
+            const content = stringify(records, { header: true, columns: headers });
+
+            await commitChangesToRepository(
+              githubRepo.owner,
+              githubRepo.repo,
+              githubRepo.filePath,
+              content,
+              'Create CSV file with new items'
+            );
+          } else {
+            console.error('Error retrieving or creating CSV file:', error);
+            await sendErrorNotification(process.env.WEBHOOK_URL, `Error retrieving or creating CSV file: ${error.message}`);
+          }
+        }
+      } else {
+        console.log(`No new items found in feed: ${url}`);
+      }
+    } catch (error) {
+      console.error(`Error checking feed ${feed.url}:`, error);
+      await sendErrorNotification(feed.url, error.message);
+    }
+  }
+
+  // Process the notification queue
+  await processNotificationQueue();
+}
+
+// Function to retry a request with exponential backoff
+async function retryRequest(requestFn, retries = 3, delay = 1000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await requestFn();
+    } catch (error) {
+      if (i === retries - 1) {
+        console.error('Request failed after retries:', error);
+        await sendErrorNotification(process.env.WEBHOOK_URL, `Request failed after retries: ${error.message}`);
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      delay *= 2;
+    }
+  }
+}
+
+// Start the feed checker
+async function startFeedChecker() {
+  console.log('Starting RSS Feed Notifier...');
 
   try {
-    // Retrieve the last processed item's date from Supabase
-    const { data: lastProcessedItem, error } = await supabase
-      .from('last_processed_items')
-      .select('last_item_date')
-      .eq('feed_url', feedUrl)
-      .maybeSingle();
+    // Check the feeds immediately when the script starts
+    await checkFeeds();
 
-    if (error) {
-      logger.error(`Error retrieving last processed item for ${feedUrl}: ${error.message}`);
-      return;
-    }
-
-    const lastItemDate = lastProcessedItem ? new Date(lastProcessedItem.last_item_date) : null;
-
-    const itemsPerPage = 10;
-    let currentPage = 1;
-    let totalPages = Math.ceil(feed.items.length / itemsPerPage);
-
-    const newItems = [];
-
-    while (currentPage <= totalPages) {
-      const startIndex = (currentPage - 1) * itemsPerPage;
-      const endIndex = startIndex + itemsPerPage;
-      const pageItems = feed.items.slice(startIndex, endIndex);
-
-      for (const item of pageItems) {
-        const itemDate = new Date(item.pubDate);
-        if (!lastItemDate || itemDate > lastItemDate) {
-          newItems.push(item);
-          processedItems++;
-        }
-      }
-
-      currentPage++;
-    }
-
-    if (newItems.length > 0) {
-      await sendDiscordNotification(newItems);
-
-      // Update the last processed item's date in Supabase
-      const { error: updateError } = await supabase
-        .from('last_processed_items')
-        .upsert({ feed_url: feedUrl, last_item_date: newItems[0].pubDate })
-        .select();
-
-      if (updateError) {
-        logger.error(`Error updating last processed item for ${feedUrl}: ${updateError.message}`);
-      }
-    }
+    // Set up an interval to check the feeds every 5 minutes (300000 milliseconds)
+    setInterval(checkFeeds, process.env.CHECK_INTERVAL);
   } catch (error) {
-    logger.error(`Error processing feed items for ${feedUrl}: ${error.message}`);
-  }
-
-  const endTime = Date.now();
-  const timeTaken = endTime - startTime;
-  logger.info(`Processed ${processedItems} feed items for ${feedUrl} in ${timeTaken}ms`);
-}
-
-// Queue for handling Discord notifications
-const notificationQueue = async.queue(async (task, callback) => {
-  const { items, isError, errorStack } = task;
-
-  if (isError) {
-    const message = `**RSS Feed Error**\n${items}\n\`\`\`${errorStack}\`\`\``;
-    await sendNotification(message);
-  } else {
-    const itemMessages = items.map((item) => `**New RSS Feed Item**\nTitle: ${item.title}\nLink: ${item.link}\nPublished Date: ${item.pubDate}`);
-    const message = itemMessages.join('\n\n');
-    await sendNotification(message);
-  }
-
-  callback();
-
-  async function sendNotification(message) {
-    const maxRetries = 3; // Maximum number of retries
-    let retries = 0;
-
-    async function attempt() {
-      try {
-        const response = await axiosInstance.post(discordWebhookUrl, {
-          content: message,
-        });
-
-        const rateLimitRemaining = parseInt(
-          response.headers['x-ratelimit-remaining']
-        );
-        const rateLimitReset = parseInt(response.headers['x-ratelimit-reset']);
-
-        if (rateLimitRemaining === 0) {
-          const resetTime = rateLimitReset * 1000; // Convert to milliseconds
-          const delay = resetTime - Date.now();
-          logger.warn(`Rate limit exceeded. Waiting for ${delay}ms before retrying.`);
-          setTimeout(attempt, delay);
-        } else {
-          logger.info('Notification sent to Discord');
-        }
-      } catch (error) {
-        if (error.response && error.response.status === 429) {
-          if (retries < maxRetries) {
-            retries++;
-            const delay = Math.pow(2, retries) * 1000; // Exponential backoff
-            logger.warn(`Rate limit exceeded. Retrying in ${delay}ms.`);
-            setTimeout(attempt, delay);
-          } else {
-            logger.error('Max retries reached. Notification failed.');
-          }
-        } else {
-          logger.error(`Error sending notification to Discord: ${error.message}`);
-        }
-      }
-    }
-
-    attempt();
-  }
-}, 1);
-
-// Function to send Discord notifications for new feed items
-async function sendDiscordNotification(items) {
-  if (discordNotificationsEnabled) {
-    try {
-      notificationQueue.push({ items, isError: false });
-    } catch (error) {
-      logger.error(`Error sending notification to Discord: ${error.message}`);
-    }
+    console.error('Unhandled error in startFeedChecker:', error);
+    await sendErrorNotification(process.env.WEBHOOK_URL, `Unhandled error in startFeedChecker: ${error.message}`);
   }
 }
 
-// Function to send Discord error notifications
-async function sendDiscordErrorNotification(errorMessage, errorStack) {
-  if (discordNotificationsEnabled) {
-    try {
-      notificationQueue.push({ items: errorMessage, isError: true, errorStack });
-    } catch (error) {
-      logger.error(
-        `Error sending error notification to Discord: ${error.message}`
-      );
-    }
-  }
-}
-
-// Route for health check
-app.get('/', (_req, res) => {
-  res.send('RSS Feed Reader is running!');
-});
-
-// Error handling middleware
-app.use((err, _req, res, _next) => {
-  logger.error(`Unhandled error: ${err.message}`);
-  res.status(500).send('Internal Server Error');
-});
-
-// Start the server
-app.listen(port, () => {
-  logger.info(`RSS Feed Reader is listening on port ${port}`);
-  checkFeedUpdates(batch1); // Call checkFeedUpdates() for batch1 on app startup
-  checkFeedUpdates(batch2); // Call checkFeedUpdates() for batch2 on app startup
-  checkFeedUpdates(batch3); // Call checkFeedUpdates() for batch3 on app startup
-});
-
-// Schedule cron jobs for each batch of feed URLs
-cron.schedule('*/5 * * * *', () => checkFeedUpdates(batch1));
-cron.schedule('*/10 * * * *', () => checkFeedUpdates(batch2));
-cron.schedule('*/15 * * * *', () => checkFeedUpdates(batch3));
+startFeedChecker();

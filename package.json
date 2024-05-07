@@ -1,24 +1,21 @@
 {
-  "name": "rss-feed-reader",
+  "name": "rss-feed-notifier",
   "version": "1.0.0",
   "main": "app.js",
   "scripts": {
     "start": "node app.js"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "author": "Mark Anthony Llego",
+  "license": "MIT",
+  "description": "The RSS Feed Notifier is a Node.js application that monitors RSS feeds, sends notifications to a Discord webhook when new items are found, and commits the URLs of the new items to a GitHub repository as a CSV file.",
   "dependencies": {
-    "@supabase/supabase-js": "^2.43.0",
-    "async": "^3.2.5",
+    "@octokit/rest": "^20.1.1",
+    "@upstash/redis": "^1.30.1",
     "axios": "^1.6.8",
-    "axios-retry": "^4.1.0",
+    "csv-parse": "^5.5.5",
+    "csv-stringify": "^6.4.6",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "node-cache": "^5.1.2",
-    "node-cron": "^3.0.3",
-    "rss-parser": "^3.13.0",
-    "winston": "^3.13.0"
+    "rss-parser": "^3.13.0"
   }
 }
