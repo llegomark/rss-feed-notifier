@@ -363,10 +363,20 @@ async function checkFeeds() {
 
           // Sort the records based on the 'Date' and 'Time' columns in descending order
           records.sort((a, b) => {
-            if (b.Date === a.Date) {
-              return b.Time.localeCompare(a.Time);
+            try {
+              const dateA = new Date(a.Date);
+              const dateB = new Date(b.Date);
+
+              // Compare dates, and if equal, compare times
+              if (dateA.getTime() === dateB.getTime()) {
+                return b.Time.localeCompare(a.Time);
+              }
+              return dateB.getTime() - dateA.getTime(); // Sort in descending order
+            } catch (error) {
+              console.error('Error parsing date:', error);
+              // Assign a default value to the comparison
+              return 0;
             }
-            return b.Date.localeCompare(a.Date);
           });
 
           const updatedContent = stringify(records, { header: true });
