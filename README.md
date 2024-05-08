@@ -28,13 +28,13 @@ Before running the RSS Feed Notifier, make sure you have the following:
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/llegomark/rss.git
+   git clone https://github.com/llegomark/rss-feed-notifier.git
    ```
 
 2. Install the dependencies:
 
    ```bash
-   cd rss
+   cd rss-feed-notifier
    npm install
    ```
 
