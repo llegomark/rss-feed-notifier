@@ -364,16 +364,38 @@ async function checkFeeds() {
           // Sort the records based on the 'Date' and 'Time' columns in descending order
           records.sort((a, b) => {
             try {
-              const dateA = new Date(a.Date);
-              const dateB = new Date(b.Date);
+              const dateA = new Date(`${a.Date}T${a.Time}+08:00`);
+              const dateB = new Date(`${b.Date}T${b.Time}+08:00`);
 
-              // Compare dates, and if equal, compare times
+              // Check if date parsing failed
+              if (isNaN(dateA.getTime()) || isNaN(dateB.getTime())) {
+                throw new Error('Invalid date format');
+              }
+
+              // Parse the time values
+              const [timeAHour, timeAMinute, timeASecond] = a.Time.split(/:|\s/);
+              const [timeBHour, timeBMinute, timeBSecond] = b.Time.split(/:|\s/);
+
+              // Check if time parsing failed
+              if (
+                isNaN(timeAHour) || isNaN(timeAMinute) || isNaN(timeASecond) ||
+                isNaN(timeBHour) || isNaN(timeBMinute) || isNaN(timeBSecond)
+              ) {
+                throw new Error('Invalid time format');
+              }
+
+              // Convert time values to numbers
+              const timeASeconds = parseInt(timeAHour, 10) * 3600 + parseInt(timeAMinute, 10) * 60 + parseInt(timeASecond, 10);
+              const timeBSeconds = parseInt(timeBHour, 10) * 3600 + parseInt(timeBMinute, 10) * 60 + parseInt(timeBSecond, 10);
+
+              // Compare dates
               if (dateA.getTime() === dateB.getTime()) {
-                return b.Time.localeCompare(a.Time);
+                // If dates are equal, compare times numerically
+                return timeBSeconds - timeASeconds;
               }
               return dateB.getTime() - dateA.getTime(); // Sort in descending order
             } catch (error) {
-              console.error('Error parsing date:', error);
+              console.error('Error parsing date and time:', error);
               // Assign a default value to the comparison
               return 0;
             }
