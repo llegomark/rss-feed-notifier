@@ -284,13 +284,10 @@ function formatDateTime(dateString) {
     minute: '2-digit',
     second: '2-digit',
     timeZone: 'Asia/Manila',
-    timeZoneName: 'short',
   };
-  const formattedDate = date.toLocaleDateString('en-US', options);
-  const [month, day, year] = formattedDate.split('/');
-  const formattedDateString = `${month.padStart(2, '0')}/${day.padStart(2, '0')}/${year}`;
-  const [, timePart] = formattedDate.split(', ');
-  return `${formattedDateString}, ${timePart}`;
+  const formattedDate = date.toLocaleString('en-US', options);
+  const [datePart, timePart] = formattedDate.split(', ');
+  return `${datePart}, ${timePart} GMT+8`;
 }
 
 function sanitizeCSV(value) {
