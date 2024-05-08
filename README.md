@@ -12,6 +12,7 @@ The RSS Feed Notifier is a Node.js application that monitors RSS feeds, sends no
 - Removes tracking parameters from URLs before committing to the repository
 - Retries failed requests with exponential backoff
 - Sends error notifications to a separate webhook for better error handling
+- Fallback mechanism to save data to a JSON file when Redis is not available
 
 ## Prerequisites
 
@@ -21,7 +22,7 @@ Before running the RSS Feed Notifier, make sure you have the following:
 - Webhook URLs for the desired notification service (Discord, Slack, or Microsoft Teams)
 - Separate webhook URLs for receiving error notifications (for each notification service)
 - A GitHub personal access token with repository access
-- An Upstash Redis database for storing last checked timestamps
+- An Upstash Redis database for storing last checked timestamps (optional)
 
 ## Installation
 
@@ -85,10 +86,16 @@ The RSS Feed Notifier can be configured using the following environment variable
 - `GITHUB_REPO_OWNER`: The owner of the GitHub repository where the CSV file will be committed.
 - `GITHUB_REPO_NAME`: The name of the GitHub repository where the CSV file will be committed.
 - `GITHUB_REPO_FILE_PATH`: The path to the CSV file within the GitHub repository.
-- `UPSTASH_REDIS_REST_URL`: The URL of your Upstash Redis database.
-- `UPSTASH_REDIS_REST_TOKEN`: The access token for your Upstash Redis database.
+- `UPSTASH_REDIS_REST_URL`: The URL of your Upstash Redis database (optional).
+- `UPSTASH_REDIS_REST_TOKEN`: The access token for your Upstash Redis database (optional).
 - `CHECK_INTERVAL`: The interval (in milliseconds) at which the RSS feeds will be checked for new items.
 - `NOTIFICATION_DELAY`: The delay (in milliseconds) between sending notifications.
+
+## Fallback Mechanism
+
+The RSS Feed Notifier includes a fallback mechanism to save data to a JSON file when Redis is not available. If the `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` environment variables are not provided, the application will automatically use the JSON file (`data.json`) to store the last checked timestamps for each feed.
+
+The JSON file will be created automatically in the project root directory when data needs to be saved. The application will handle the creation, reading, and writing of the JSON file without any manual intervention.
 
 ## License
 

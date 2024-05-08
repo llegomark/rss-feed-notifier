@@ -1,21 +1,122 @@
+import 'dotenv/config';
 import axios from 'axios';
-import Parser from 'rss-parser';
-import { Redis } from '@upstash/redis';
+import fs from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { Octokit } from '@octokit/rest';
 import { parse } from 'csv-parse/sync';
 import { stringify } from 'csv-stringify/sync';
-import 'dotenv/config';
+import Parser from 'rss-parser';
+import { Redis } from '@upstash/redis';
 
+// Utility functions
+async function saveToJSONFile(key, value) {
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const filePath = path.join(__dirname, 'data.json');
+
+  try {
+    let data = {};
+
+    try {
+      const fileContent = await fs.readFile(filePath, 'utf-8');
+      data = JSON.parse(fileContent);
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        throw error;
+      }
+    }
+
+    data[key] = value;
+
+    await fs.writeFile(filePath, JSON.stringify(data, null, 2));
+  } catch (error) {
+    console.error('Error saving data to JSON file:', error);
+    await notificationService.sendErrorNotification(process.env.WEBHOOK_URL, `Error saving data to JSON file: ${error.message}`);
+  }
+}
+
+async function getFromJSONFile(key) {
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const filePath = path.join(__dirname, 'data.json');
+
+  try {
+    const fileContent = await fs.readFile(filePath, 'utf-8');
+    const data = JSON.parse(fileContent);
+    return data[key] || 0;
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return 0;
+    }
+    console.error('Error retrieving data from JSON file:', error);
+    await notificationService.sendErrorNotification(process.env.WEBHOOK_URL, `Error retrieving data from JSON file: ${error.message}`);
+    return 0;
+  }
+}
+
+function formatDateTime(dateString) {
+  const date = new Date(dateString);
+  const options = {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: 'Asia/Manila',
+  };
+  const formattedDate = date.toLocaleString('en-US', options);
+  const [datePart, timePart] = formattedDate.split(', ');
+  return `${datePart}, ${timePart} GMT+8`;
+}
+
+function sanitizeCSV(value) {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  return value
+    .replace(/[\n\r]/g, '')
+    .replace(/"/g, '""')
+    .replace(/'/g, "'")
+    .replace(/[,;\t]/g, '')
+    .replace(/<[^>]*>/g, '');
+}
+
+async function removeTrackingParams(url) {
+  try {
+    return url
+      .replace(/(\?|&)(utm_\w+=[^&]*)/g, '')
+      .replace(/(\?|&)fbclid=[^&]*/g, '')
+      .replace(/(\?|&)t=[^&]*/g, '')
+      .replace(/(\?|&)lipi=[^&]*/g, '')
+      .replace(/(\?|&)igshid=[^&]*/g, '')
+      .replace(/(\?|&)pin_\w+=[^&]*/g, '')
+      .replace(/(\?|&)ref=\w+/g, '')
+      .replace(/(\?|&)_t=[^&]*/g, '')
+      .replace(/(\?|&)sc_[^&]*/g, '')
+      .replace(/(\?|&)feature=[^&]*/g, '')
+      .replace(/[?&]$/, '');
+  } catch (error) {
+    console.error('Error removing tracking parameters from URL:', error);
+    await notificationService.sendErrorNotification(process.env.WEBHOOK_URL, `Error removing tracking parameters from URL: ${error.message}`);
+    return url;
+  }
+}
+
+// Configuration and setup
 const parser = new Parser();
 const octokit = new Octokit({
   auth: process.env.GITHUB_ACCESS_TOKEN,
 });
 
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN,
-});
+const redis = process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
+  ? new Redis({
+    url: process.env.UPSTASH_REDIS_REST_URL,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN,
+  })
+  : null;
 
+// Notification service classes
 class NotificationService {
   /**
    * Sends a notification for a feed item.
@@ -270,6 +371,7 @@ class TeamsNotificationService extends NotificationService {
   }
 }
 
+// Notification service factory
 function createNotificationService(serviceType) {
   switch (serviceType) {
     case 'discord':
@@ -285,56 +387,7 @@ function createNotificationService(serviceType) {
 
 const notificationService = createNotificationService(process.env.NOTIFICATION_SERVICE);
 
-function formatDateTime(dateString) {
-  const date = new Date(dateString);
-  const options = {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    timeZone: 'Asia/Manila',
-  };
-  const formattedDate = date.toLocaleString('en-US', options);
-  const [datePart, timePart] = formattedDate.split(', ');
-  return `${datePart}, ${timePart} GMT+8`;
-}
-
-function sanitizeCSV(value) {
-  if (typeof value !== 'string') {
-    return value;
-  }
-
-  return value
-    .replace(/[\n\r]/g, '')
-    .replace(/"/g, '""')
-    .replace(/'/g, "'")
-    .replace(/[,;\t]/g, '')
-    .replace(/<[^>]*>/g, '');
-}
-
-async function removeTrackingParams(url) {
-  try {
-    return url
-      .replace(/(\?|&)(utm_\w+=[^&]*)/g, '')
-      .replace(/(\?|&)fbclid=[^&]*/g, '')
-      .replace(/(\?|&)t=[^&]*/g, '')
-      .replace(/(\?|&)lipi=[^&]*/g, '')
-      .replace(/(\?|&)igshid=[^&]*/g, '')
-      .replace(/(\?|&)pin_\w+=[^&]*/g, '')
-      .replace(/(\?|&)ref=\w+/g, '')
-      .replace(/(\?|&)_t=[^&]*/g, '')
-      .replace(/(\?|&)sc_[^&]*/g, '')
-      .replace(/(\?|&)feature=[^&]*/g, '')
-      .replace(/[?&]$/, '');
-  } catch (error) {
-    console.error('Error removing tracking parameters from URL:', error);
-    await notificationService.sendErrorNotification(process.env.WEBHOOK_URL, `Error removing tracking parameters from URL: ${error.message}`);
-    return url;
-  }
-}
-
+// Notification queue and processing
 const notificationQueue = [];
 let isProcessingQueue = false;
 
@@ -354,6 +407,7 @@ async function processNotificationQueue() {
   isProcessingQueue = false;
 }
 
+// GitHub repository functions
 async function commitChangesToRepository(owner, repo, filePath, content, commitMessage) {
   try {
     try {
@@ -373,10 +427,10 @@ async function commitChangesToRepository(owner, repo, filePath, content, commitM
     let latestCommitSha = null;
 
     try {
-      const { data: { sha } } = await octokit.repos.getCommit({
+      const { data: { object: { sha } } } = await octokit.git.getRef({
         owner,
         repo,
-        ref: 'main',
+        ref: 'heads/main',
       });
       latestCommitSha = sha;
     } catch (error) {
@@ -434,19 +488,7 @@ async function commitChangesToRepository(owner, repo, filePath, content, commitM
       repo,
       ref: 'heads/main',
       sha: latestCommitSha,
-    }).catch(async (error) => {
-      if (error.status === 422) {
-        // Pull the latest changes and merge them
-        await octokit.git.updateRef({
-          owner,
-          repo,
-          ref: 'heads/main',
-          sha: latestCommitSha,
-          force: true,
-        });
-      } else {
-        throw error;
-      }
+      force: true,
     });
 
     console.log('Changes committed successfully!');
@@ -548,10 +590,13 @@ async function commitNewItemsToRepository(newItems, githubRepo) {
   }
 }
 
-async function checkFeed(feed, githubRepo) {
+// Feed checking functions
+async function checkFeed(feed) {
   try {
     const { url } = feed;
-    const lastCheckedTime = await redis.get(url) || 0;
+    const lastCheckedTime = redis
+      ? await redis.get(url) || 0
+      : await getFromJSONFile(url);
 
     const parsedFeed = await retryRequest(() => parser.parseURL(url));
     const newItems = parsedFeed.items.filter(
@@ -560,17 +605,15 @@ async function checkFeed(feed, githubRepo) {
 
     if (newItems.length > 0) {
       console.log(`Found ${newItems.length} new item(s) in feed: ${url}`);
-
-      await processNewItems(newItems, githubRepo);
-
-      const lastBuildDate = parsedFeed.lastBuildDate ? new Date(parsedFeed.lastBuildDate).getTime() : Date.now();
-      await redis.set(url, lastBuildDate);
+      return newItems;
     } else {
       console.log(`No new items found in feed: ${url}`);
+      return [];
     }
   } catch (error) {
     console.error(`Error checking feed ${feed.url}:`, error);
     await notificationService.sendErrorNotification(feed.url, error.message);
+    return [];
   }
 }
 
@@ -582,11 +625,28 @@ async function checkFeeds() {
     filePath: process.env.GITHUB_REPO_FILE_PATH,
   };
 
-  await Promise.all(feeds.map((feed) => checkFeed(feed, githubRepo)));
+  const allNewItems = await Promise.all(feeds.map((feed) => checkFeed(feed)));
+  const flattenedNewItems = allNewItems.flat();
+
+  if (flattenedNewItems.length > 0) {
+    await processNewItems(flattenedNewItems, githubRepo);
+
+    for (const feed of feeds) {
+      const { url } = feed;
+      const parsedFeed = await retryRequest(() => parser.parseURL(url));
+      const lastBuildDate = parsedFeed.lastBuildDate ? new Date(parsedFeed.lastBuildDate).getTime() : Date.now();
+      if (redis) {
+        await redis.set(url, lastBuildDate);
+      } else {
+        await saveToJSONFile(url, lastBuildDate);
+      }
+    }
+  }
 
   await processNotificationQueue();
 }
 
+// Retry request function
 async function retryRequest(requestFn, retries = 3, delay = 1000) {
   for (let i = 0; i < retries; i++) {
     try {
@@ -603,6 +663,7 @@ async function retryRequest(requestFn, retries = 3, delay = 1000) {
   }
 }
 
+// Main function
 async function startFeedChecker() {
   console.log('Starting RSS Feed Notifier...');
 
@@ -615,4 +676,5 @@ async function startFeedChecker() {
   }
 }
 
+// Start the RSS Feed Notifier
 startFeedChecker();
