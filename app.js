@@ -11,13 +11,269 @@ const octokit = new Octokit({
   auth: process.env.GITHUB_ACCESS_TOKEN,
 });
 
-// Create a Redis instance
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
 });
 
-// Function to format the date and time in GMT+8 Manila format
+class NotificationService {
+  async sendNotification(feed) {
+    // Parameters are used by subclasses
+    throw new Error('Not implemented');
+  }
+
+  async sendErrorNotification(feedUrl, errorMessage) {
+    // Parameters are used by subclasses
+    throw new Error('Not implemented');
+  }
+}
+
+class DiscordNotificationService extends NotificationService {
+  async sendNotification(feed) {
+    const { title, link, isoDate } = feed;
+
+    const embedData = {
+      title: title,
+      url: link,
+      timestamp: new Date().toISOString(),
+      fields: [
+        {
+          name: 'Published Date',
+          value: formatDateTime(isoDate),
+        },
+        {
+          name: 'URL',
+          value: link,
+        },
+      ],
+    };
+
+    const maxRetries = 3;
+    let retries = 0;
+    let globalRateLimited = false;
+
+    while (retries < maxRetries) {
+      try {
+        await axios.post(process.env.WEBHOOK_URL, {
+          embeds: [embedData],
+        });
+        console.log(`Notification sent for: ${title}`);
+        break;
+      } catch (error) {
+        if (error.response && error.response.status === 429) {
+          const retryAfter = error.response.data.retry_after * 1000;
+          const isGlobal = error.response.data.global;
+
+          if (isGlobal) {
+            console.log('Global rate limit hit. Pausing all requests.');
+            globalRateLimited = true;
+            await new Promise((resolve) => setTimeout(resolve, retryAfter));
+          } else {
+            console.log(`Rate limit hit for notification: ${title}. Retrying after ${retryAfter}ms.`);
+            await new Promise((resolve) => setTimeout(resolve, retryAfter));
+          }
+        } else {
+          console.error('Error sending Discord notification:', error);
+          await this.sendErrorNotification(process.env.WEBHOOK_URL, `Error sending Discord notification: ${error.message}`);
+          break;
+        }
+      }
+
+      retries++;
+    }
+
+    if (retries === maxRetries) {
+      console.error(`Failed to send notification after ${maxRetries} retries: ${title}`);
+      await this.sendErrorNotification(process.env.WEBHOOK_URL, `Failed to send notification after ${maxRetries} retries: ${title}`);
+    }
+
+    if (globalRateLimited) {
+      console.log('Global rate limit resolved. Resuming requests.');
+    }
+  }
+
+  async sendErrorNotification(feedUrl, errorMessage) {
+    const embedData = {
+      title: 'Error Checking Feed',
+      description: `An error occurred while checking the feed: ${feedUrl}`,
+      color: 16711680,
+      fields: [
+        {
+          name: 'Error Message',
+          value: errorMessage,
+        },
+      ],
+      timestamp: new Date().toISOString(),
+    };
+
+    try {
+      await axios.post(process.env.ERROR_WEBHOOK_URL, {
+        embeds: [embedData],
+      }, {
+        timeout: 5000,
+      });
+      console.log(`Error notification sent for feed: ${feedUrl}`);
+    } catch (error) {
+      console.error('Error sending error notification:', error);
+    }
+  }
+}
+
+class SlackNotificationService extends NotificationService {
+  async sendNotification(feed) {
+    const { title, link, isoDate } = feed;
+
+    const message = {
+      text: `New feed item: ${title}`,
+      attachments: [
+        {
+          title: title,
+          title_link: link,
+          fields: [
+            {
+              title: 'Published Date',
+              value: formatDateTime(isoDate),
+              short: true,
+            },
+            {
+              title: 'URL',
+              value: link,
+              short: false,
+            },
+          ],
+          ts: Math.floor(new Date().getTime() / 1000),
+        },
+      ],
+    };
+
+    try {
+      await axios.post(process.env.SLACK_WEBHOOK_URL, message);
+      console.log(`Notification sent for: ${title}`);
+    } catch (error) {
+      console.error('Error sending Slack notification:', error);
+      await this.sendErrorNotification(process.env.SLACK_WEBHOOK_URL, `Error sending Slack notification: ${error.message}`);
+    }
+  }
+
+  async sendErrorNotification(feedUrl, errorMessage) {
+    const message = {
+      text: `Error Checking Feed: ${feedUrl}`,
+      attachments: [
+        {
+          color: 'danger',
+          fields: [
+            {
+              title: 'Error Message',
+              value: errorMessage,
+              short: false,
+            },
+          ],
+          ts: Math.floor(new Date().getTime() / 1000),
+        },
+      ],
+    };
+
+    try {
+      await axios.post(process.env.SLACK_ERROR_WEBHOOK_URL, message);
+      console.log(`Error notification sent for feed: ${feedUrl}`);
+    } catch (error) {
+      console.error('Error sending Slack error notification:', error);
+    }
+  }
+}
+
+class TeamsNotificationService extends NotificationService {
+  async sendNotification(feed) {
+    const { title, link, isoDate } = feed;
+
+    const card = {
+      '@type': 'MessageCard',
+      '@context': 'http://schema.org/extensions',
+      themeColor: '0076D7',
+      summary: `New feed item: ${title}`,
+      sections: [
+        {
+          activityTitle: title,
+          activitySubtitle: formatDateTime(isoDate),
+          activityImage: '',
+          facts: [
+            {
+              name: 'URL',
+              value: link,
+            },
+          ],
+          markdown: true,
+        },
+      ],
+      potentialAction: [
+        {
+          '@type': 'OpenUri',
+          name: 'View in browser',
+          targets: [
+            {
+              os: 'default',
+              uri: link,
+            },
+          ],
+        },
+      ],
+    };
+
+    try {
+      await axios.post(process.env.TEAMS_WEBHOOK_URL, card);
+      console.log(`Notification sent for: ${title}`);
+    } catch (error) {
+      console.error('Error sending Teams notification:', error);
+      await this.sendErrorNotification(process.env.TEAMS_WEBHOOK_URL, `Error sending Teams notification: ${error.message}`);
+    }
+  }
+
+  async sendErrorNotification(feedUrl, errorMessage) {
+    const card = {
+      '@type': 'MessageCard',
+      '@context': 'http://schema.org/extensions',
+      themeColor: 'FF0000',
+      summary: `Error Checking Feed: ${feedUrl}`,
+      sections: [
+        {
+          activityTitle: 'Error Checking Feed',
+          activitySubtitle: feedUrl,
+          activityImage: '',
+          facts: [
+            {
+              name: 'Error Message',
+              value: errorMessage,
+            },
+          ],
+          markdown: true,
+        },
+      ],
+    };
+
+    try {
+      await axios.post(process.env.TEAMS_ERROR_WEBHOOK_URL, card);
+      console.log(`Error notification sent for feed: ${feedUrl}`);
+    } catch (error) {
+      console.error('Error sending Teams error notification:', error);
+    }
+  }
+}
+
+function createNotificationService(serviceType) {
+  switch (serviceType) {
+    case 'discord':
+      return new DiscordNotificationService();
+    case 'slack':
+      return new SlackNotificationService();
+    case 'teams':
+      return new TeamsNotificationService();
+    default:
+      throw new Error('Invalid notification service type');
+  }
+}
+
+const notificationService = createNotificationService(process.env.NOTIFICATION_SERVICE);
+
 function formatDateTime(dateString) {
   const date = new Date(dateString);
   const options = {
@@ -31,170 +287,47 @@ function formatDateTime(dateString) {
     timeZoneName: 'short',
   };
   const formattedDate = date.toLocaleDateString('en-US', options);
-  const [datePart, timePart] = formattedDate.split(', ');
-  return `${datePart},${timePart}`;
+  const [month, day, year] = formattedDate.split('/');
+  const formattedDateString = `${month.padStart(2, '0')}/${day.padStart(2, '0')}/${year}`;
+  const [, timePart] = formattedDate.split(', ');
+  return `${formattedDateString},${timePart}`;
 }
 
-// Function to sanitize a string for CSV format
 function sanitizeCSV(value) {
   if (typeof value !== 'string') {
     return value;
   }
 
-  // Remove newline characters
   value = value.replace(/[\n\r]/g, '');
-
-  // Replace double quotes with two double quotes
   value = value.replace(/"/g, '""');
-
-  // Replace U+2019 "'" with ASCII character U+0027 "'"
   value = value.replace(/'/g, "'");
-
-  // Remove any other problematic characters
   value = value.replace(/[,;\t]/g, '');
-
-  // Remove HTML tags
   value = value.replace(/<[^>]*>/g, '');
 
   return value;
 }
 
-// Function to remove tracking parameters from URL
 async function removeTrackingParams(url) {
   try {
-    // Remove UTM parameters (Google Analytics)
     url = url.replace(/(\?|&)(utm_\w+=[^&]*)/g, '');
-
-    // Remove Facebook click identifier
     url = url.replace(/(\?|&)fbclid=[^&]*/g, '');
-
-    // Remove Twitter click identifier
     url = url.replace(/(\?|&)t=[^&]*/g, '');
-
-    // Remove LinkedIn click identifier
     url = url.replace(/(\?|&)lipi=[^&]*/g, '');
-
-    // Remove Instagram click identifier
     url = url.replace(/(\?|&)igshid=[^&]*/g, '');
-
-    // Remove Pinterest click identifier
     url = url.replace(/(\?|&)pin_\w+=[^&]*/g, '');
-
-    // Remove Reddit click identifier
     url = url.replace(/(\?|&)ref=\w+/g, '');
-
-    // Remove TikTok click identifier
     url = url.replace(/(\?|&)_t=[^&]*/g, '');
-
-    // Remove Snapchat click identifier
     url = url.replace(/(\?|&)sc_[^&]*/g, '');
-
-    // Remove YouTube click identifier
     url = url.replace(/(\?|&)feature=[^&]*/g, '');
-
-    // Remove trailing question mark or ampersand if present
     url = url.replace(/[?&]$/, '');
   } catch (error) {
     console.error('Error removing tracking parameters from URL:', error);
-    // Send an error notification to Discord webhook
-    await sendErrorNotification(process.env.WEBHOOK_URL, `Error removing tracking parameters from URL: ${error.message}`);
+    await notificationService.sendErrorNotification(process.env.WEBHOOK_URL, `Error removing tracking parameters from URL: ${error.message}`);
   }
 
   return url;
 }
 
-// Function to send a notification to the Discord webhook with rate limit handling
-async function sendDiscordNotification(feed) {
-  const { title, link, isoDate } = feed;
-
-  const embedData = {
-    title: title,
-    url: link,
-    timestamp: new Date().toISOString(),
-    fields: [
-      {
-        name: 'Published Date',
-        value: formatDateTime(isoDate),
-      },
-      {
-        name: 'URL',
-        value: link,
-      },
-    ],
-  };
-
-  const maxRetries = 3;
-  let retries = 0;
-  let globalRateLimited = false;
-
-  while (retries < maxRetries) {
-    try {
-      await axios.post(process.env.WEBHOOK_URL, {
-        embeds: [embedData],
-      });
-      console.log(`Notification sent for: ${title}`);
-      break;
-    } catch (error) {
-      if (error.response && error.response.status === 429) {
-        const retryAfter = error.response.data.retry_after * 1000;
-        const isGlobal = error.response.data.global;
-
-        if (isGlobal) {
-          console.log('Global rate limit hit. Pausing all requests.');
-          globalRateLimited = true;
-          await new Promise((resolve) => setTimeout(resolve, retryAfter));
-        } else {
-          console.log(`Rate limit hit for notification: ${title}. Retrying after ${retryAfter}ms.`);
-          await new Promise((resolve) => setTimeout(resolve, retryAfter));
-        }
-      } else {
-        console.error('Error sending Discord notification:', error);
-        await sendErrorNotification(process.env.WEBHOOK_URL, `Error sending Discord notification: ${error.message}`);
-        break;
-      }
-    }
-
-    retries++;
-  }
-
-  if (retries === maxRetries) {
-    console.error(`Failed to send notification after ${maxRetries} retries: ${title}`);
-    await sendErrorNotification(process.env.WEBHOOK_URL, `Failed to send notification after ${maxRetries} retries: ${title}`);
-  }
-
-  if (globalRateLimited) {
-    console.log('Global rate limit resolved. Resuming requests.');
-  }
-}
-
-// Function to send an error notification to a separate Discord webhook
-async function sendErrorNotification(feedUrl, errorMessage) {
-  const embedData = {
-    title: 'Error Checking Feed',
-    description: `An error occurred while checking the feed: ${feedUrl}`,
-    color: 16711680, // Red color
-    fields: [
-      {
-        name: 'Error Message',
-        value: errorMessage,
-      },
-    ],
-    timestamp: new Date().toISOString(),
-  };
-
-  try {
-    await axios.post(process.env.ERROR_WEBHOOK_URL, {
-      embeds: [embedData],
-    }, {
-      timeout: 5000, // Set a timeout of 5 seconds
-    });
-    console.log(`Error notification sent for feed: ${feedUrl}`);
-  } catch (error) {
-    console.error('Error sending error notification:', error);
-  }
-}
-
-// Simple queue implementation for sending notifications with a delay
 const notificationQueue = [];
 let isProcessingQueue = false;
 
@@ -207,17 +340,15 @@ async function processNotificationQueue() {
 
   while (notificationQueue.length > 0) {
     const notification = notificationQueue.shift();
-    await sendDiscordNotification(notification);
+    await notificationService.sendNotification(notification);
     await new Promise((resolve) => setTimeout(resolve, process.env.NOTIFICATION_DELAY));
   }
 
   isProcessingQueue = false;
 }
 
-// Function to commit changes to a GitHub repository
 async function commitChangesToRepository(owner, repo, filePath, content, commitMessage) {
   try {
-    // Check if the repository exists
     try {
       await octokit.repos.get({
         owner,
@@ -226,7 +357,7 @@ async function commitChangesToRepository(owner, repo, filePath, content, commitM
     } catch (error) {
       if (error.status === 404) {
         console.error(`Repository ${owner}/${repo} not found. Please create the repository on GitHub.`);
-        await sendErrorNotification(process.env.WEBHOOK_URL, `Repository ${owner}/${repo} not found. Please create the repository on GitHub.`);
+        await notificationService.sendErrorNotification(process.env.WEBHOOK_URL, `Repository ${owner}/${repo} not found. Please create the repository on GitHub.`);
         return;
       }
       throw error;
@@ -301,11 +432,123 @@ async function commitChangesToRepository(owner, repo, filePath, content, commitM
     console.log('Changes committed successfully!');
   } catch (error) {
     console.error('Error committing changes:', error);
-    await sendErrorNotification(process.env.WEBHOOK_URL, `Error committing changes: ${error.message}`);
+    await notificationService.sendErrorNotification(process.env.WEBHOOK_URL, `Error committing changes: ${error.message}`);
   }
 }
 
-// Function to check for new feeds and commit changes to GitHub repository
+async function processNewItems(newItems, githubRepo) {
+  notificationQueue.push(...newItems);
+  await commitNewItemsToRepository(newItems, githubRepo);
+}
+
+async function commitNewItemsToRepository(newItems, githubRepo) {
+  try {
+    let records = [];
+
+    try {
+      const { data: fileContent } = await octokit.repos.getContent({
+        owner: githubRepo.owner,
+        repo: githubRepo.repo,
+        path: githubRepo.filePath,
+      });
+
+      const decodedContent = Buffer.from(fileContent.content, 'base64').toString('utf-8');
+      records = parse(decodedContent, { columns: true });
+    } catch (error) {
+      if (error.status !== 404) {
+        throw error;
+      }
+    }
+
+    for (const item of newItems) {
+      const title = item.title || 'No title available';
+      const link = item.link || 'No link available';
+      const isoDate = item.isoDate || new Date().toISOString();
+
+      const [date, time] = formatDateTime(isoDate).split(',');
+      const sanitizedTitle = sanitizeCSV(title);
+      const sanitizedLink = await removeTrackingParams(sanitizeCSV(link));
+
+      records.push({
+        Date: date,
+        Time: time,
+        Title: sanitizedTitle,
+        URL: sanitizedLink,
+      });
+    }
+
+    records.sort((a, b) => {
+      const dateA = new Date(`${a.Date} ${a.Time}`);
+      const dateB = new Date(`${b.Date} ${b.Time}`);
+
+      return dateB.getTime() - dateA.getTime();
+    });
+
+    const updatedContent = stringify(records, { header: true });
+
+    await commitChangesToRepository(
+      githubRepo.owner,
+      githubRepo.repo,
+      githubRepo.filePath,
+      updatedContent,
+      'Update CSV file with sorted items'
+    );
+  } catch (error) {
+    if (error.status === 404) {
+      const headers = ['Date', 'Time', 'Title', 'URL'];
+      const records = await Promise.all(
+        newItems.map(async (item) => {
+          const [date, time] = formatDateTime(item.isoDate || new Date().toISOString()).split(',');
+          return {
+            Date: date,
+            Time: time,
+            Title: sanitizeCSV(item.title || 'No title available'),
+            URL: await removeTrackingParams(sanitizeCSV(item.link || 'No link available')),
+          };
+        })
+      );
+
+      const content = stringify(records, { header: true, columns: headers });
+
+      await commitChangesToRepository(
+        githubRepo.owner,
+        githubRepo.repo,
+        githubRepo.filePath,
+        content,
+        'Create CSV file with new items'
+      );
+    } else {
+      console.error('Error retrieving or creating CSV file:', error);
+      await notificationService.sendErrorNotification(process.env.WEBHOOK_URL, `Error retrieving or creating CSV file: ${error.message}`);
+    }
+  }
+}
+
+async function checkFeed(feed, githubRepo) {
+  try {
+    const { url } = feed;
+    const lastCheckedTime = await redis.get(url) || 0;
+
+    const parsedFeed = await retryRequest(() => parser.parseURL(url));
+    const newItems = parsedFeed.items.filter(
+      (item) => new Date(item.pubDate).getTime() > lastCheckedTime
+    );
+
+    if (newItems.length > 0) {
+      console.log(`Found ${newItems.length} new item(s) in feed: ${url}`);
+
+      await processNewItems(newItems, githubRepo);
+
+      await redis.set(url, new Date(parsedFeed.lastBuildDate).getTime());
+    } else {
+      console.log(`No new items found in feed: ${url}`);
+    }
+  } catch (error) {
+    console.error(`Error checking feed ${feed.url}:`, error);
+    await notificationService.sendErrorNotification(feed.url, error.message);
+  }
+}
+
 async function checkFeeds() {
   const feeds = process.env.FEEDS.split(',').map((url) => ({ url }));
   const githubRepo = {
@@ -315,145 +558,12 @@ async function checkFeeds() {
   };
 
   for (const feed of feeds) {
-    try {
-      const { url } = feed;
-      const lastCheckedTime = await redis.get(url) || 0;
-
-      const parsedFeed = await retryRequest(() => parser.parseURL(url));
-      const newItems = parsedFeed.items.filter(
-        (item) => new Date(item.isoDate).getTime() > lastCheckedTime
-      );
-
-      if (newItems.length > 0) {
-        console.log(`Found ${newItems.length} new item(s) in feed: ${url}`);
-
-        // Add new items to the notification queue
-        notificationQueue.push(...newItems);
-
-        // Update the last checked time for the feed in Redis
-        await redis.set(url, new Date(parsedFeed.lastBuildDate).getTime());
-
-        // Commit new items to the GitHub repository
-        try {
-          const { data: fileContent } = await octokit.repos.getContent({
-            owner: githubRepo.owner,
-            repo: githubRepo.repo,
-            path: githubRepo.filePath,
-          });
-
-          const decodedContent = Buffer.from(fileContent.content, 'base64').toString('utf-8');
-          const records = parse(decodedContent, { columns: true });
-
-          for (const item of newItems) {
-            const title = item.title || 'No title available';
-            const link = item.link || 'No link available';
-            const isoDate = item.isoDate || new Date().toISOString();
-
-            const [date, time] = formatDateTime(isoDate).split(',');
-            const sanitizedTitle = sanitizeCSV(title);
-            const sanitizedLink = await removeTrackingParams(sanitizeCSV(link));
-
-            records.push({
-              Date: date,
-              Time: time,
-              Title: sanitizedTitle,
-              URL: sanitizedLink,
-            });
-          }
-
-          // Sort the records based on the 'Date' and 'Time' columns in descending order
-          records.sort((a, b) => {
-            try {
-              const dateA = new Date(`${a.Date}T${a.Time}+08:00`);
-              const dateB = new Date(`${b.Date}T${b.Time}+08:00`);
-
-              // Check if date parsing failed
-              if (isNaN(dateA.getTime()) || isNaN(dateB.getTime())) {
-                throw new Error('Invalid date format');
-              }
-
-              // Parse the time values
-              const [timeAHour, timeAMinute, timeASecond] = a.Time.split(/:|\s/);
-              const [timeBHour, timeBMinute, timeBSecond] = b.Time.split(/:|\s/);
-
-              // Check if time parsing failed
-              if (
-                isNaN(timeAHour) || isNaN(timeAMinute) || isNaN(timeASecond) ||
-                isNaN(timeBHour) || isNaN(timeBMinute) || isNaN(timeBSecond)
-              ) {
-                throw new Error('Invalid time format');
-              }
-
-              // Convert time values to numbers
-              const timeASeconds = parseInt(timeAHour, 10) * 3600 + parseInt(timeAMinute, 10) * 60 + parseInt(timeASecond, 10);
-              const timeBSeconds = parseInt(timeBHour, 10) * 3600 + parseInt(timeBMinute, 10) * 60 + parseInt(timeBSecond, 10);
-
-              // Compare dates
-              if (dateA.getTime() === dateB.getTime()) {
-                // If dates are equal, compare times numerically
-                return timeBSeconds - timeASeconds;
-              }
-              return dateB.getTime() - dateA.getTime(); // Sort in descending order
-            } catch (error) {
-              console.error('Error parsing date and time:', error);
-              // Assign a default value to the comparison
-              return 0;
-            }
-          });
-
-          const updatedContent = stringify(records, { header: true });
-
-          await commitChangesToRepository(
-            githubRepo.owner,
-            githubRepo.repo,
-            githubRepo.filePath,
-            updatedContent,
-            'Update CSV file with new items'
-          );
-        } catch (error) {
-          if (error.status === 404) {
-            // CSV file doesn't exist, create a new file with headers
-            const headers = ['Date', 'Time', 'Title', 'URL'];
-            const records = await Promise.all(
-              newItems.map(async (item) => {
-                const [date, time] = formatDateTime(item.isoDate || new Date().toISOString()).split(',');
-                return {
-                  Date: date,
-                  Time: time,
-                  Title: sanitizeCSV(item.title || 'No title available'),
-                  URL: await removeTrackingParams(sanitizeCSV(item.link || 'No link available')),
-                };
-              })
-            );
-
-            const content = stringify(records, { header: true, columns: headers });
-
-            await commitChangesToRepository(
-              githubRepo.owner,
-              githubRepo.repo,
-              githubRepo.filePath,
-              content,
-              'Create CSV file with new items'
-            );
-          } else {
-            console.error('Error retrieving or creating CSV file:', error);
-            await sendErrorNotification(process.env.WEBHOOK_URL, `Error retrieving or creating CSV file: ${error.message}`);
-          }
-        }
-      } else {
-        console.log(`No new items found in feed: ${url}`);
-      }
-    } catch (error) {
-      console.error(`Error checking feed ${feed.url}:`, error);
-      await sendErrorNotification(feed.url, error.message);
-    }
+    await checkFeed(feed, githubRepo);
   }
 
-  // Process the notification queue
   await processNotificationQueue();
 }
 
-// Function to retry a request with exponential backoff
 async function retryRequest(requestFn, retries = 3, delay = 1000) {
   for (let i = 0; i < retries; i++) {
     try {
@@ -461,7 +571,7 @@ async function retryRequest(requestFn, retries = 3, delay = 1000) {
     } catch (error) {
       if (i === retries - 1) {
         console.error('Request failed after retries:', error);
-        await sendErrorNotification(process.env.WEBHOOK_URL, `Request failed after retries: ${error.message}`);
+        await notificationService.sendErrorNotification(process.env.WEBHOOK_URL, `Request failed after retries: ${error.message}`);
         throw error;
       }
       await new Promise((resolve) => setTimeout(resolve, delay));
@@ -470,19 +580,15 @@ async function retryRequest(requestFn, retries = 3, delay = 1000) {
   }
 }
 
-// Start the feed checker
 async function startFeedChecker() {
   console.log('Starting RSS Feed Notifier...');
 
   try {
-    // Check the feeds immediately when the script starts
     await checkFeeds();
-
-    // Set up an interval to check the feeds every 5 minutes (300000 milliseconds)
     setInterval(checkFeeds, process.env.CHECK_INTERVAL);
   } catch (error) {
     console.error('Unhandled error in startFeedChecker:', error);
-    await sendErrorNotification(process.env.WEBHOOK_URL, `Unhandled error in startFeedChecker: ${error.message}`);
+    await notificationService.sendErrorNotification(process.env.WEBHOOK_URL, `Unhandled error in startFeedChecker: ${error.message}`);
   }
 }
 
