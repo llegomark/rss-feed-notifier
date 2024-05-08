@@ -457,22 +457,26 @@ async function commitNewItemsToRepository(newItems, githubRepo) {
       }
     }
 
-    for (const item of newItems) {
-      const title = item.title || 'No title available';
-      const link = item.link || 'No link available';
-      const isoDate = item.isoDate || new Date().toISOString();
+    const updatedRecords = await Promise.all(
+      newItems.map(async (item) => {
+        const title = item.title || 'No title available';
+        const link = item.link || 'No link available';
+        const isoDate = item.isoDate || new Date().toISOString();
 
-      const [date, time] = formatDateTime(isoDate).split(',');
-      const sanitizedTitle = sanitizeCSV(title);
-      const sanitizedLink = await removeTrackingParams(sanitizeCSV(link));
+        const [date, time] = formatDateTime(isoDate).split(',');
+        const sanitizedTitle = sanitizeCSV(title);
+        const sanitizedLink = await removeTrackingParams(sanitizeCSV(link));
 
-      records.push({
-        Date: date,
-        Time: time,
-        Title: sanitizedTitle,
-        URL: sanitizedLink,
-      });
-    }
+        return {
+          Date: date,
+          Time: time,
+          Title: sanitizedTitle,
+          URL: sanitizedLink,
+        };
+      })
+    );
+
+    records.push(...updatedRecords);
 
     records.sort((a, b) => {
       const dateA = new Date(`${a.Date} ${a.Time}`);
@@ -554,9 +558,7 @@ async function checkFeeds() {
     filePath: process.env.GITHUB_REPO_FILE_PATH,
   };
 
-  for (const feed of feeds) {
-    await checkFeed(feed, githubRepo);
-  }
+  await Promise.all(feeds.map((feed) => checkFeed(feed, githubRepo)));
 
   await processNotificationQueue();
 }
