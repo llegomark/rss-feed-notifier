@@ -1,14 +1,19 @@
 {
   "name": "rss-feed-notifier",
   "version": "1.0.0",
-  "main": "app.js",
+  "description": "The RSS Feed Notifier is a Node.js application that monitors RSS feeds, sends notifications to a Discord webhook when new items are found, and commits the URLs of the new items to a GitHub repository as a CSV file.",
+  "main": "app.mjs",
+  "type": "module",
   "scripts": {
-    "start": "node app.js"
+    "start": "node app.mjs",
+    "lint": "eslint ."
   },
-  "keywords": [],
+  "keywords": [
+    "rss",
+    "rss feed"
+  ],
   "author": "Mark Anthony Llego",
   "license": "MIT",
-  "description": "The RSS Feed Notifier is a Node.js application that monitors RSS feeds, sends notifications to a Discord webhook when new items are found, and commits the URLs of the new items to a GitHub repository as a CSV file.",
   "dependencies": {
     "@octokit/rest": "^20.1.1",
     "@upstash/redis": "^1.30.1",
@@ -17,5 +22,10 @@
     "csv-stringify": "^6.4.6",
     "dotenv": "^16.4.5",
     "rss-parser": "^3.13.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.2.0",
+    "eslint": "^9.2.0",
+    "globals": "^15.1.0"
   }
 }

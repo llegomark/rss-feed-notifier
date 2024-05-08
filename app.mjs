@@ -1,10 +1,10 @@
-const axios = require('axios');
-const Parser = require('rss-parser');
-const Redis = require('@upstash/redis').Redis;
-const { Octokit } = require('@octokit/rest');
-const { parse } = require('csv-parse/sync');
-const { stringify } = require('csv-stringify/sync');
-require('dotenv').config();
+import axios from 'axios';
+import Parser from 'rss-parser';
+import { Redis } from '@upstash/redis';
+import { Octokit } from '@octokit/rest';
+import { parse } from 'csv-parse/sync';
+import { stringify } from 'csv-stringify/sync';
+import 'dotenv/config';
 
 const parser = new Parser();
 const octokit = new Octokit({
@@ -17,13 +17,22 @@ const redis = new Redis({
 });
 
 class NotificationService {
+  /**
+   * Sends a notification for a feed item.
+   * @param {object} feed - The feed item to send a notification for.
+   * @throws {Error} Not implemented error.
+   */
   async sendNotification(feed) {
-    // Parameters are used by subclasses
     throw new Error('Not implemented');
   }
 
+  /**
+   * Sends an error notification for a feed.
+   * @param {string} feedUrl - The URL of the feed that encountered an error.
+   * @param {string} errorMessage - The error message associated with the feed.
+   * @throws {Error} Not implemented error.
+   */
   async sendErrorNotification(feedUrl, errorMessage) {
-    // Parameters are used by subclasses
     throw new Error('Not implemented');
   }
 }
@@ -33,7 +42,7 @@ class DiscordNotificationService extends NotificationService {
     const { title, link, isoDate } = feed;
 
     const embedData = {
-      title: title,
+      title,
       url: link,
       timestamp: new Date().toISOString(),
       fields: [
@@ -127,7 +136,7 @@ class SlackNotificationService extends NotificationService {
       text: `New feed item: ${title}`,
       attachments: [
         {
-          title: title,
+          title,
           title_link: link,
           fields: [
             {
@@ -295,34 +304,33 @@ function sanitizeCSV(value) {
     return value;
   }
 
-  value = value.replace(/[\n\r]/g, '');
-  value = value.replace(/"/g, '""');
-  value = value.replace(/'/g, "'");
-  value = value.replace(/[,;\t]/g, '');
-  value = value.replace(/<[^>]*>/g, '');
-
-  return value;
+  return value
+    .replace(/[\n\r]/g, '')
+    .replace(/"/g, '""')
+    .replace(/'/g, "'")
+    .replace(/[,;\t]/g, '')
+    .replace(/<[^>]*>/g, '');
 }
 
 async function removeTrackingParams(url) {
   try {
-    url = url.replace(/(\?|&)(utm_\w+=[^&]*)/g, '');
-    url = url.replace(/(\?|&)fbclid=[^&]*/g, '');
-    url = url.replace(/(\?|&)t=[^&]*/g, '');
-    url = url.replace(/(\?|&)lipi=[^&]*/g, '');
-    url = url.replace(/(\?|&)igshid=[^&]*/g, '');
-    url = url.replace(/(\?|&)pin_\w+=[^&]*/g, '');
-    url = url.replace(/(\?|&)ref=\w+/g, '');
-    url = url.replace(/(\?|&)_t=[^&]*/g, '');
-    url = url.replace(/(\?|&)sc_[^&]*/g, '');
-    url = url.replace(/(\?|&)feature=[^&]*/g, '');
-    url = url.replace(/[?&]$/, '');
+    return url
+      .replace(/(\?|&)(utm_\w+=[^&]*)/g, '')
+      .replace(/(\?|&)fbclid=[^&]*/g, '')
+      .replace(/(\?|&)t=[^&]*/g, '')
+      .replace(/(\?|&)lipi=[^&]*/g, '')
+      .replace(/(\?|&)igshid=[^&]*/g, '')
+      .replace(/(\?|&)pin_\w+=[^&]*/g, '')
+      .replace(/(\?|&)ref=\w+/g, '')
+      .replace(/(\?|&)_t=[^&]*/g, '')
+      .replace(/(\?|&)sc_[^&]*/g, '')
+      .replace(/(\?|&)feature=[^&]*/g, '')
+      .replace(/[?&]$/, '');
   } catch (error) {
     console.error('Error removing tracking parameters from URL:', error);
     await notificationService.sendErrorNotification(process.env.WEBHOOK_URL, `Error removing tracking parameters from URL: ${error.message}`);
+    return url;
   }
-
-  return url;
 }
 
 const notificationQueue = [];
