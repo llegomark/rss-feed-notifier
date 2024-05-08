@@ -42,16 +42,16 @@ class DiscordNotificationService extends NotificationService {
     const { title, link, isoDate } = feed;
 
     const embedData = {
-      title,
+      title: `📰 ${title}`,
       url: link,
       timestamp: new Date().toISOString(),
       fields: [
         {
-          name: 'Published Date',
+          name: '📅 Published Date',
           value: formatDateTime(isoDate),
         },
         {
-          name: 'URL',
+          name: '🔗 URL',
           value: link,
         },
       ],
@@ -64,9 +64,10 @@ class DiscordNotificationService extends NotificationService {
     while (retries < maxRetries) {
       try {
         await axios.post(process.env.WEBHOOK_URL, {
+          content: '🚨 New feed item detected! 🚨',
           embeds: [embedData],
         });
-        console.log(`Notification sent for: ${title}`);
+        console.log(`✅ Notification sent for: ${title}`);
         break;
       } catch (error) {
         if (error.response && error.response.status === 429) {
@@ -74,16 +75,16 @@ class DiscordNotificationService extends NotificationService {
           const isGlobal = error.response.data.global;
 
           if (isGlobal) {
-            console.log('Global rate limit hit. Pausing all requests.');
+            console.log('⏳ Global rate limit hit. Pausing all requests.');
             globalRateLimited = true;
             await new Promise((resolve) => setTimeout(resolve, retryAfter));
           } else {
-            console.log(`Rate limit hit for notification: ${title}. Retrying after ${retryAfter}ms.`);
+            console.log(`⏳ Rate limit hit for notification: ${title}. Retrying after ${retryAfter}ms.`);
             await new Promise((resolve) => setTimeout(resolve, retryAfter));
           }
         } else {
-          console.error('Error sending Discord notification:', error);
-          await this.sendErrorNotification(process.env.WEBHOOK_URL, `Error sending Discord notification: ${error.message}`);
+          console.error('❌ Error sending Discord notification:', error);
+          await this.sendErrorNotification(process.env.WEBHOOK_URL, `❌ Error sending Discord notification: ${error.message}`);
           break;
         }
       }
@@ -92,23 +93,23 @@ class DiscordNotificationService extends NotificationService {
     }
 
     if (retries === maxRetries) {
-      console.error(`Failed to send notification after ${maxRetries} retries: ${title}`);
-      await this.sendErrorNotification(process.env.WEBHOOK_URL, `Failed to send notification after ${maxRetries} retries: ${title}`);
+      console.error(`❌ Failed to send notification after ${maxRetries} retries: ${title}`);
+      await this.sendErrorNotification(process.env.WEBHOOK_URL, `❌ Failed to send notification after ${maxRetries} retries: ${title}`);
     }
 
     if (globalRateLimited) {
-      console.log('Global rate limit resolved. Resuming requests.');
+      console.log('✅ Global rate limit resolved. Resuming requests.');
     }
   }
 
   async sendErrorNotification(feedUrl, errorMessage) {
     const embedData = {
-      title: 'Error Checking Feed',
-      description: `An error occurred while checking the feed: ${feedUrl}`,
+      title: '🚨 Error Checking Feed',
+      description: `❌ An error occurred while checking the feed: ${feedUrl}`,
       color: 16711680,
       fields: [
         {
-          name: 'Error Message',
+          name: '❌ Error Message',
           value: errorMessage,
         },
       ],
@@ -117,13 +118,14 @@ class DiscordNotificationService extends NotificationService {
 
     try {
       await axios.post(process.env.ERROR_WEBHOOK_URL, {
+        content: '🚨 Feed Checker Error! 🚨',
         embeds: [embedData],
       }, {
         timeout: 5000,
       });
-      console.log(`Error notification sent for feed: ${feedUrl}`);
+      console.log(`✅ Error notification sent for feed: ${feedUrl}`);
     } catch (error) {
-      console.error('Error sending error notification:', error);
+      console.error('❌ Error sending error notification:', error);
     }
   }
 }
