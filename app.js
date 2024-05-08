@@ -290,7 +290,7 @@ function formatDateTime(dateString) {
   const [month, day, year] = formattedDate.split('/');
   const formattedDateString = `${month.padStart(2, '0')}/${day.padStart(2, '0')}/${year}`;
   const [, timePart] = formattedDate.split(', ');
-  return `${formattedDateString},${timePart}`;
+  return `${formattedDateString}, ${timePart}`;
 }
 
 function sanitizeCSV(value) {
