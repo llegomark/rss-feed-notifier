@@ -432,6 +432,19 @@ async function commitChangesToRepository(owner, repo, filePath, content, commitM
       repo,
       ref: 'heads/main',
       sha: latestCommitSha,
+    }).catch(async (error) => {
+      if (error.status === 422) {
+        // Pull the latest changes and merge them
+        await octokit.git.updateRef({
+          owner,
+          repo,
+          ref: 'heads/main',
+          sha: latestCommitSha,
+          force: true,
+        });
+      } else {
+        throw error;
+      }
     });
 
     console.log('Changes committed successfully!');
@@ -548,7 +561,8 @@ async function checkFeed(feed, githubRepo) {
 
       await processNewItems(newItems, githubRepo);
 
-      await redis.set(url, new Date(parsedFeed.lastBuildDate).getTime());
+      const lastBuildDate = parsedFeed.lastBuildDate ? new Date(parsedFeed.lastBuildDate).getTime() : Date.now();
+      await redis.set(url, lastBuildDate);
     } else {
       console.log(`No new items found in feed: ${url}`);
     }
