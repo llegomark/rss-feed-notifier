@@ -58,6 +58,7 @@ Before running the RSS Feed Notifier, make sure you have the following:
    UPSTASH_REDIS_REST_TOKEN=your-upstash-redis-rest-token
    CHECK_INTERVAL=300000
    NOTIFICATION_DELAY=1000
+   NOTIFICATIONS_ENABLED=true
    ```
 
    Replace the placeholders with your actual values.
@@ -90,6 +91,7 @@ The RSS Feed Notifier can be configured using the following environment variable
 - `UPSTASH_REDIS_REST_TOKEN`: The access token for your Upstash Redis database (optional).
 - `CHECK_INTERVAL`: The interval (in milliseconds) at which the RSS feeds will be checked for new items.
 - `NOTIFICATION_DELAY`: The delay (in milliseconds) between sending notifications.
+- `NOTIFICATIONS_ENABLED`: Whether notifications are enabled (true or false).
 
 ## Fallback Mechanism
 

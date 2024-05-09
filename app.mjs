@@ -140,6 +140,10 @@ class NotificationService {
 
 class DiscordNotificationService extends NotificationService {
   async sendNotification(feed) {
+    if (process.env.NOTIFICATIONS_ENABLED !== 'true') {
+      console.log('Notifications are disabled. Skipping notification.');
+      return;
+    }
     const { title, link, isoDate } = feed;
 
     const embedData = {
@@ -204,6 +208,10 @@ class DiscordNotificationService extends NotificationService {
   }
 
   async sendErrorNotification(feedUrl, errorMessage) {
+    if (process.env.NOTIFICATIONS_ENABLED !== 'true') {
+      console.log('Notifications are disabled. Skipping error notification.');
+      return;
+    }
     const embedData = {
       title: '🚨 Error Checking Feed',
       description: `❌ An error occurred while checking the feed: ${feedUrl}`,
@@ -233,6 +241,10 @@ class DiscordNotificationService extends NotificationService {
 
 class SlackNotificationService extends NotificationService {
   async sendNotification(feed) {
+    if (process.env.NOTIFICATIONS_ENABLED !== 'true') {
+      console.log('Notifications are disabled. Skipping notification.');
+      return;
+    }
     const { title, link, isoDate } = feed;
 
     const message = {
@@ -268,6 +280,10 @@ class SlackNotificationService extends NotificationService {
   }
 
   async sendErrorNotification(feedUrl, errorMessage) {
+    if (process.env.NOTIFICATIONS_ENABLED !== 'true') {
+      console.log('Notifications are disabled. Skipping error notification.');
+      return;
+    }
     const message = {
       text: `Error Checking Feed: ${feedUrl}`,
       attachments: [
@@ -296,6 +312,10 @@ class SlackNotificationService extends NotificationService {
 
 class TeamsNotificationService extends NotificationService {
   async sendNotification(feed) {
+    if (process.env.NOTIFICATIONS_ENABLED !== 'true') {
+      console.log('Notifications are disabled. Skipping notification.');
+      return;
+    }
     const { title, link, isoDate } = feed;
 
     const card = {
@@ -341,6 +361,10 @@ class TeamsNotificationService extends NotificationService {
   }
 
   async sendErrorNotification(feedUrl, errorMessage) {
+    if (process.env.NOTIFICATIONS_ENABLED !== 'true') {
+      console.log('Notifications are disabled. Skipping error notification.');
+      return;
+    }
     const card = {
       '@type': 'MessageCard',
       '@context': 'http://schema.org/extensions',
