@@ -530,6 +530,12 @@ async function commitChangesToRepository(owner, repo, filePath, content, commitM
 }
 
 async function processNewItems(newItems, githubRepo) {
+  const maxQueueSize = parseInt(process.env.MAX_QUEUE_SIZE, 10) || 50;
+  
+  if (notificationQueue.length + newItems.length > maxQueueSize) {
+    console.warn('Notification queue size exceeded. Discarding oldest notifications.');
+    notificationQueue.splice(0, newItems.length); // Remove oldest notifications
+  }
   notificationQueue.push(...newItems);
   await commitNewItemsToRepository(newItems, githubRepo);
 }
