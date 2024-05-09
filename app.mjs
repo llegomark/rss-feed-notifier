@@ -581,7 +581,7 @@ async function commitNewItemsToRepository(newItems, githubRepo) {
       githubRepo.repo,
       githubRepo.filePath,
       updatedContent,
-      'Update CSV file with sorted items'
+      `Add ${newItems.length} new RSS feed item(s) to ${githubRepo.filePath}`
     );
   } catch (error) {
     if (error.status === 404) {
@@ -605,7 +605,7 @@ async function commitNewItemsToRepository(newItems, githubRepo) {
         githubRepo.repo,
         githubRepo.filePath,
         content,
-        'Create CSV file with new items'
+        `Create ${githubRepo.filePath} with ${newItems.length} new RSS feed item(s)`
       );
     } else {
       console.error('Error retrieving or creating CSV file:', error);

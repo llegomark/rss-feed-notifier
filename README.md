@@ -13,6 +13,8 @@ The RSS Feed Notifier is a Node.js application that monitors RSS feeds, sends no
 - Retries failed requests with exponential backoff
 - Sends error notifications to a separate webhook for better error handling
 - Fallback mechanism to save data to a JSON file when Redis is not available
+- Configurable check interval and notification delay
+- Option to enable or disable notifications
 
 ## Prerequisites
 
@@ -23,6 +25,9 @@ Before running the RSS Feed Notifier, make sure you have the following:
 - Separate webhook URLs for receiving error notifications (for each notification service)
 - A GitHub personal access token with repository access
 - An Upstash Redis database for storing last checked timestamps (optional)
+- A GitHub repository where the CSV file will be committed
+- A CSV file in the GitHub repository where the new item URLs will be stored (optional)
+- A list of RSS feed URLs to monitor
 
 ## Installation
 
