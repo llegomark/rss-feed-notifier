@@ -140,11 +140,20 @@ class GitHubIntegration {
                 });
             });
 
-            const newRecords = newItems.map((item) => ({
-                Title: item.title,
-                Link: item.link,
-                'Published At': this.formatDate(item.pubDate),
-            }));
+            const existingLinks = records.map((record) => record.Link);
+
+            const newRecords = newItems
+                .filter((item) => !existingLinks.includes(item.link))
+                .map((item) => ({
+                    Title: item.title,
+                    Link: item.link,
+                    'Published At': this.formatDate(item.pubDate),
+                }));
+
+            if (newRecords.length === 0) {
+                logger.info('No new feed data to commit. Skipping update.');
+                return;
+            }
 
             const allRecords = [...newRecords, ...records];
 
@@ -164,7 +173,7 @@ class GitHubIntegration {
                 });
             });
 
-            const commitMessage = `Update RSS feed data (${newItems.length} new item${newItems.length !== 1 ? 's' : ''}) - ${DateTime.now().setZone('Asia/Manila').toFormat('yyyy-MM-dd HH:mm:ss')}`;
+            const commitMessage = `Update RSS feed data (${newRecords.length} new item${newRecords.length !== 1 ? 's' : ''}) - ${DateTime.now().setZone('Asia/Manila').toFormat('yyyy-MM-dd HH:mm:ss')}`;
 
             await this.octokit.repos.createOrUpdateFileContents({
                 owner: this.owner,
@@ -277,36 +286,54 @@ class RSSFeedNotifier {
     }
 
     validateConfig(config) {
-        const requiredProperties = [
-            'discordWebhookUrl',
-            'discordErrorWebhookUrl',
-            'checkInterval',
-            'githubToken',
-            'githubRepo',
-            'githubOwner',
-            'feedUrlsPath',
-            'maxRetries',
-            'retryDelay',
-            'processedStateFile',
-            'dataFile',
-        ];
+        const {
+            discordWebhookUrl,
+            discordErrorWebhookUrl,
+            checkInterval,
+            githubToken,
+            githubRepo,
+            githubOwner,
+            feedUrlsPath,
+            maxRetries,
+            retryDelay,
+            processedStateFile,
+            dataFile,
+        } = config;
 
-        for (const property of requiredProperties) {
-            if (!config[property]) {
-                throw new Error(`Missing required configuration property: ${property}`);
+        this.validateRequiredProperty('discordWebhookUrl', discordWebhookUrl, 'string');
+        this.validateDiscordWebhookUrl('discordWebhookUrl', discordWebhookUrl);
+
+        this.validateRequiredProperty('discordErrorWebhookUrl', discordErrorWebhookUrl, 'string');
+        this.validateDiscordWebhookUrl('discordErrorWebhookUrl', discordErrorWebhookUrl);
+
+        this.validateRequiredProperty('checkInterval', checkInterval, 'number', { min: 0 });
+        this.validateRequiredProperty('githubToken', githubToken, 'string');
+        this.validateRequiredProperty('githubRepo', githubRepo, 'string');
+        this.validateRequiredProperty('githubOwner', githubOwner, 'string');
+        this.validateRequiredProperty('feedUrlsPath', feedUrlsPath, 'string');
+        this.validateRequiredProperty('maxRetries', maxRetries, 'number', { min: 0 });
+        this.validateRequiredProperty('retryDelay', retryDelay, 'number', { min: 0 });
+        this.validateRequiredProperty('processedStateFile', processedStateFile, 'string');
+        this.validateRequiredProperty('dataFile', dataFile, 'string');
+    }
+
+    validateRequiredProperty(name, value, type, options = {}) {
+        if (typeof value !== type) {
+            throw new Error(`Invalid ${name} value. It must be a ${type}.`);
+        }
+
+        if (type === 'number') {
+            if (options.min !== undefined && value <= options.min) {
+                throw new Error(`Invalid ${name} value. It must be greater than ${options.min}.`);
             }
         }
+    }
 
-        if (typeof config.checkInterval !== 'number' || config.checkInterval <= 0) {
-            throw new Error('Invalid checkInterval value. It must be a positive number.');
-        }
+    validateDiscordWebhookUrl(name, value) {
+        const discordWebhookUrlPrefix = 'https://discord.com/api/webhooks/';
 
-        if (typeof config.maxRetries !== 'number' || config.maxRetries < 0) {
-            throw new Error('Invalid maxRetries value. It must be a non-negative number.');
-        }
-
-        if (typeof config.retryDelay !== 'number' || config.retryDelay <= 0) {
-            throw new Error('Invalid retryDelay value. It must be a positive number.');
+        if (!value.startsWith(discordWebhookUrlPrefix)) {
+            throw new Error(`Invalid ${name} value. It must start with "${discordWebhookUrlPrefix}".`);
         }
     }
 
