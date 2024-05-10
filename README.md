@@ -1,108 +1,104 @@
-# RSS Feed Notifier
+# Better RSS Feed Notifier
 
-The RSS Feed Notifier is a Node.js application that monitors RSS feeds, sends notifications to a configurable notification service (Discord, Slack, or Microsoft Teams) when new items are found, and commits the URLs of the new items to a GitHub repository as a CSV file.
+The Better RSS Feed Notifier is a high-performance Node.js application that monitors RSS feeds, sends notifications to Discord, and commits updates to a GitHub repository. It leverages asynchronous programming, optimized libraries, and follows best practices to deliver efficient and reliable performance.
 
 ## Features
 
-- Monitors multiple RSS feeds for new items
-- Supports multiple notification services: Discord, Slack, and Microsoft Teams
-- Sends notifications with rate limit handling (for Discord)
-- Commits new item URLs to a GitHub repository as a CSV file
-- Separates the date and time in the CSV file and converts the time to GMT+8 Manila time zone
-- Removes tracking parameters from URLs before committing to the repository
-- Retries failed requests with exponential backoff
-- Sends error notifications to a separate webhook for better error handling
-- Fallback mechanism to save data to a JSON file when Redis is not available
-- Configurable check interval and notification delay
-- Option to enable or disable notifications
+- Monitors multiple RSS feeds for new updates
+- Sends real-time notifications to Discord using webhooks
+- Commits updates to a GitHub repository as a CSV file
+- Handles rate limiting and error retries for seamless operation
+- Supports graceful shutdown and process signal handling
+- Adheres to SOLID principles for clean and maintainable code
+- Retrieves feed URLs from a GitHub repository for easy configuration management
+- Handles connection resets, network failures, and feed parsing errors with retries
+- Converts dates to Manila time zone for consistent formatting
+- Sorts and deduplicates records before committing to GitHub
+- Utilizes a logger for comprehensive logging and error tracking
+- Sends error notifications to a separate Discord webhook for better error monitoring
+- Validates configuration file properties to ensure proper setup
+- Modular design with separate classes for Discord notifications, GitHub integration, and feed parsing
 
-## Prerequisites
+## Performance
 
-Before running the RSS Feed Notifier, make sure you have the following:
+The Better RSS Feed Notifier is designed with performance and efficiency in mind. It utilizes the following techniques and libraries to achieve optimal performance:
 
-- Node.js installed on your machine
-- Webhook URLs for the desired notification service (Discord, Slack, or Microsoft Teams)
-- Separate webhook URLs for receiving error notifications (for each notification service)
-- A GitHub personal access token with repository access
-- An Upstash Redis database for storing last checked timestamps (optional)
-- A GitHub repository where the CSV file will be committed
-- A CSV file in the GitHub repository where the new item URLs will be stored (optional)
-- A list of RSS feed URLs to monitor
+- Asynchronous programming with `async/await` for non-blocking I/O operations
+- `axios` library for fast and efficient HTTP requests
+- `htmlparser2` library for quick parsing of RSS feeds
+- `@octokit/rest` for seamless integration with the GitHub API
+- `csv-parse` and `csv-stringify` for efficient CSV parsing and generation
+- `luxon` for accurate date and time manipulation
+
+With its optimized code and carefully selected dependencies, the RSS Feed Notifier can handle a large number of RSS feeds and deliver notifications in real-time, ensuring that you stay up-to-date with the latest updates.
 
 ## Installation
 
 1. Clone the repository:
-
-   ```bash
-   git clone https://github.com/llegomark/rss-feed-notifier.git
+   ```
+   git clone https://github.com/llegomark/rss-feed-notifier
    ```
 
 2. Install the dependencies:
-
-   ```bash
+   ```
    cd rss-feed-notifier
    npm install
    ```
 
-3. Create a `.env` file in the project root and provide the necessary environment variables:
-
-   ```plaintext
-   NOTIFICATION_SERVICE=discord
-   FEEDS=https://example.com/feed1.xml,https://example.com/feed2.xml
-   WEBHOOK_URL=https://discord.com/api/webhooks/your-webhook-url
-   ERROR_WEBHOOK_URL=https://discord.com/api/webhooks/your-error-webhook-url
-   SLACK_WEBHOOK_URL=https://hooks.slack.com/services/your-slack-webhook-url
-   SLACK_ERROR_WEBHOOK_URL=https://hooks.slack.com/services/your-slack-error-webhook-url
-   TEAMS_WEBHOOK_URL=https://outlook.office.com/webhook/your-teams-webhook-url
-   TEAMS_ERROR_WEBHOOK_URL=https://outlook.office.com/webhook/your-teams-error-webhook-url
-   GITHUB_ACCESS_TOKEN=your-github-access-token
-   GITHUB_REPO_OWNER=your-github-username
-   GITHUB_REPO_NAME=your-repository-name
-   GITHUB_REPO_FILE_PATH=path/to/file.csv
-   UPSTASH_REDIS_REST_URL=your-upstash-redis-rest-url
-   UPSTASH_REDIS_REST_TOKEN=your-upstash-redis-rest-token
-   CHECK_INTERVAL=300000
-   NOTIFICATION_DELAY=1000
-   NOTIFICATIONS_ENABLED=true
+3. Create a `config.json` file in the project root with the following structure:
+   ```json
+   {
+     "discordWebhookUrl": "YOUR_DISCORD_WEBHOOK_URL",
+     "discordErrorWebhookUrl": "YOUR_DISCORD_ERROR_WEBHOOK_URL",
+     "checkInterval": 300000,
+     "githubToken": "YOUR_GITHUB_ACCESS_TOKEN",
+     "githubRepo": "YOUR_GITHUB_REPOSITORY",
+     "githubOwner": "YOUR_GITHUB_USERNAME",
+     "feedUrlsPath": "feed_urls.json",
+     "sendDiscordNotifications": false,
+     "maxRetries": 3,
+     "retryDelay": 5000,
+     "processedStateFile": "processed_state.json",
+     "dataFile": "data.csv"
+   }
    ```
 
-   Replace the placeholders with your actual values.
-
-4. Start the application:
-
-   ```bash
-   npm start
+4. Create a `feed_urls.json` file in the project root with the following structure:
+   ```json
+   [
+     "https://example.com/feed/",
+     "https://www.example.com/feed/",
+     "http://example.com/feed/"
+   ]
    ```
 
-   The RSS Feed Notifier will start monitoring the specified RSS feeds and send notifications to the configured notification service when new items are found. It will also commit the URLs of the new items to the specified GitHub repository as a CSV file.
+5. Run the application:
+   ```
+   node app.mjs
+   ```
 
 ## Configuration
 
-The RSS Feed Notifier can be configured using the following environment variables:
+The Better RSS Feed Notifier can be configured using the `config.json` file. Here's a description of each configuration option:
 
-- `NOTIFICATION_SERVICE`: The notification service to use (discord, slack, or teams).
-- `FEEDS`: A comma-separated list of RSS feed URLs to monitor.
-- `WEBHOOK_URL`: The Discord webhook URL for receiving notifications.
-- `ERROR_WEBHOOK_URL`: The Discord webhook URL for receiving error notifications.
-- `SLACK_WEBHOOK_URL`: The Slack webhook URL for receiving notifications.
-- `SLACK_ERROR_WEBHOOK_URL`: The Slack webhook URL for receiving error notifications.
-- `TEAMS_WEBHOOK_URL`: The Microsoft Teams webhook URL for receiving notifications.
-- `TEAMS_ERROR_WEBHOOK_URL`: The Microsoft Teams webhook URL for receiving error notifications.
-- `GITHUB_ACCESS_TOKEN`: Your GitHub personal access token with repository access.
-- `GITHUB_REPO_OWNER`: The owner of the GitHub repository where the CSV file will be committed.
-- `GITHUB_REPO_NAME`: The name of the GitHub repository where the CSV file will be committed.
-- `GITHUB_REPO_FILE_PATH`: The path to the CSV file within the GitHub repository.
-- `UPSTASH_REDIS_REST_URL`: The URL of your Upstash Redis database (optional).
-- `UPSTASH_REDIS_REST_TOKEN`: The access token for your Upstash Redis database (optional).
-- `CHECK_INTERVAL`: The interval (in milliseconds) at which the RSS feeds will be checked for new items.
-- `NOTIFICATION_DELAY`: The delay (in milliseconds) between sending notifications.
-- `NOTIFICATIONS_ENABLED`: Whether notifications are enabled (true or false).
+- `discordWebhookUrl`: The URL of the Discord webhook where notifications will be sent.
+- `discordErrorWebhookUrl`: The URL of the Discord webhook where error notifications will be sent.
+- `checkInterval`: The interval at which the RSS feeds should be checked, specified in milliseconds.
+- `githubToken`: Your GitHub access token for committing updates to the repository.
+- `githubRepo`: The name of the GitHub repository where updates will be committed.
+- `githubOwner`: Your GitHub username or the owner of the repository.
+- `feedUrlsPath`: The path to the JSON file containing the RSS feed URLs to monitor.
+- `sendDiscordNotifications`: A boolean indicating whether to send Discord notifications or not.
+- `maxRetries`: The maximum number of retries for failed feed requests.
+- `retryDelay`: The delay in milliseconds between each retry attempt.
+- `processedStateFile`: The path to the JSON file storing the processed state of the feeds.
+- `dataFile`: The path to the CSV file where the feed data will be stored.
 
-## Fallback Mechanism
+Make sure to replace the placeholders with your actual values.
 
-The RSS Feed Notifier includes a fallback mechanism to save data to a JSON file when Redis is not available. If the `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` environment variables are not provided, the application will automatically use the JSON file (`data.json`) to store the last checked timestamps for each feed.
+## Contributing
 
-The JSON file will be created automatically in the project root directory when data needs to be saved. The application will handle the creation, reading, and writing of the JSON file without any manual intervention.
+Contributions are welcome! If you find any issues or have suggestions for improvements, please open an issue or submit a pull request.
 
 ## License
 
