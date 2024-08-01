@@ -7,6 +7,8 @@ import { parse } from 'csv-parse';
 import { parseFeed } from 'htmlparser2';
 import { stringify } from 'csv-stringify';
 import winston from 'winston';
+import DailyRotateFile from 'winston-daily-rotate-file';
+import pLimit from 'p-limit';
 
 const logger = winston.createLogger({
     level: 'info',
@@ -15,9 +17,21 @@ const logger = winston.createLogger({
         winston.format.json()
     ),
     transports: [
-        new winston.transports.Console(),
-        new winston.transports.File({ filename: 'error.log', level: 'error' }),
-        new winston.transports.File({ filename: 'combined.log' })
+        new DailyRotateFile({
+            filename: 'error-%DATE%.log',
+            datePattern: 'YYYY-MM-DD',
+            zippedArchive: true,
+            maxSize: '500m',
+            maxFiles: '14d',
+            level: 'error',
+        }),
+        new DailyRotateFile({
+            filename: 'combined-%DATE%.log',
+            datePattern: 'YYYY-MM-DD',
+            zippedArchive: true,
+            maxSize: '500m',
+            maxFiles: '14d',
+        }),
     ]
 });
 
@@ -43,11 +57,11 @@ class DiscordNotifier {
                 }
             );
 
-            this.handleRateLimit(response);
+            await this.handleRateLimit(response);
 
             logger.info(`Notification sent for item: ${item.title}`);
         } catch (error) {
-            this.handleError(error, item);
+            await this.handleError(error, item);
         }
     }
 
@@ -65,7 +79,7 @@ class DiscordNotifier {
                 }
             );
 
-            this.handleRateLimit(response);
+            await this.handleRateLimit(response);
 
             logger.info(`Error notification sent: ${message}`);
         } catch (error) {
@@ -73,14 +87,14 @@ class DiscordNotifier {
         }
     }
 
-    handleRateLimit(response) {
+    async handleRateLimit(response) {
         const rateLimitRemaining = parseInt(response.headers['x-ratelimit-remaining']);
         const rateLimitReset = parseInt(response.headers['x-ratelimit-reset']);
 
         if (rateLimitRemaining === 0) {
             const resetTime = new Date(rateLimitReset * 1000);
             logger.info(`Rate limit exceeded. Waiting until ${resetTime.toLocaleString()} to continue.`);
-            return new Promise((resolve) => setTimeout(resolve, rateLimitReset * 1000 - Date.now()));
+            await new Promise((resolve) => setTimeout(resolve, rateLimitReset * 1000 - Date.now()));
         }
     }
 
@@ -107,13 +121,24 @@ class GitHubIntegration {
         this.repo = repo;
         this.octokit = new Octokit({
             auth: token,
+            throttle: {
+                onRateLimit: (retryAfter, options) => {
+                    logger.warn(`Request quota exhausted for request ${options.method} ${options.url}`);
+                    if (options.request.retryCount <= 2) {
+                        logger.info(`Retrying after ${retryAfter} seconds!`);
+                        return true;
+                    }
+                },
+                onAbuseLimit: (retryAfter, options) => {
+                    logger.warn(`Abuse detected for request ${options.method} ${options.url}`);
+                },
+            },
         });
     }
 
     async commitUpdates(newItems, dataFile) {
         try {
             const path = dataFile;
-
             let csvContent = '';
             let sha = undefined;
             try {
@@ -128,6 +153,7 @@ class GitHubIntegration {
                 if (error.status !== 404) {
                     throw error;
                 }
+                // File doesn't exist, we'll create it
             }
 
             const records = await new Promise((resolve, reject) => {
@@ -183,8 +209,11 @@ class GitHubIntegration {
                 content: Buffer.from(updatedCsvContent).toString('base64'),
                 sha: sha,
             });
+
+            logger.info(`Successfully committed ${newRecords.length} new items to GitHub`);
         } catch (error) {
             logger.error('Error committing updates to GitHub repository:', error);
+            throw error; // Propagate the error
         }
     }
 
@@ -210,13 +239,16 @@ class GitHubIntegration {
 }
 
 class FeedParser {
-    constructor(maxRetries, retryDelay) {
+    constructor(maxRetries, retryDelay, maxItems = 100) {
         this.maxRetries = maxRetries;
         this.retryDelay = retryDelay;
+        this.maxItems = maxItems;
     }
 
     async parseFeed(url, processedState, retryCount = 0) {
         try {
+            console.log(`Checking feed: ${url}`);
+            logger.info(`Checking feed: ${url}`);
             const httpsAgent = new https.Agent({
                 rejectUnauthorized: false,
             });
@@ -226,6 +258,7 @@ class FeedParser {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
                 },
+                timeout: 30000, // 30 seconds timeout
             });
             const feed = parseFeed(response.data);
 
@@ -234,7 +267,7 @@ class FeedParser {
 
             const newItems = [];
             if (lastBuildDate > processedBuildDate) {
-                for (const item of feed.items) {
+                for (const item of feed.items.slice(0, this.maxItems)) {
                     const itemPubDate = item.pubDate ? DateTime.fromJSDate(new Date(item.pubDate)).setZone('Asia/Manila').toMillis() : 0;
                     if (itemPubDate > processedBuildDate) {
                         newItems.push(item);
@@ -242,13 +275,16 @@ class FeedParser {
                 }
                 processedState[url] = lastBuildDate;
             }
+            logger.info(`Found ${newItems.length} new items for feed: ${url}`);
             return { items: newItems, hasError: false };
         } catch (error) {
             if (this.shouldRetry(error, retryCount)) {
-                logger.warn(`Temporary error for feed: ${url}. Retrying in ${this.retryDelay}ms...`);
+                console.log(`Retrying feed: ${url}`);
+                logger.warn(`Retrying feed: ${url}`);
                 await new Promise((resolve) => setTimeout(resolve, this.retryDelay));
                 return this.parseFeed(url, processedState, retryCount + 1);
             } else {
+                console.log(`Problem with feed: ${url}`);
                 logger.error(`Error parsing feed: ${url}`, error);
                 return { items: [], hasError: true };
             }
@@ -271,7 +307,7 @@ class RSSFeedNotifier {
         this.processedState = this.loadProcessedState();
         this.discordNotifier = new DiscordNotifier(this.config.discordWebhookUrl, this.config.discordErrorWebhookUrl);
         this.githubIntegration = new GitHubIntegration(this.config.githubOwner, this.config.githubRepo, this.config.githubToken);
-        this.feedParser = new FeedParser(this.config.maxRetries, this.config.retryDelay);
+        this.feedParser = new FeedParser(this.config.maxRetries, this.config.retryDelay, this.config.maxItemsPerFeed);
     }
 
     readConfigFile() {
@@ -280,6 +316,7 @@ class RSSFeedNotifier {
             this.validateConfig(config);
             return config;
         } catch (error) {
+            console.error('Error reading or parsing the configuration file:', error);
             logger.error('Error reading or parsing the configuration file:', error);
             process.exit(1);
         }
@@ -298,6 +335,8 @@ class RSSFeedNotifier {
             retryDelay,
             processedStateFile,
             dataFile,
+            sendDiscordNotifications,
+            maxItemsPerFeed,
         } = config;
 
         this.validateRequiredProperty('discordWebhookUrl', discordWebhookUrl, 'string');
@@ -315,6 +354,8 @@ class RSSFeedNotifier {
         this.validateRequiredProperty('retryDelay', retryDelay, 'number', { min: 0 });
         this.validateRequiredProperty('processedStateFile', processedStateFile, 'string');
         this.validateRequiredProperty('dataFile', dataFile, 'string');
+        this.validateRequiredProperty('sendDiscordNotifications', sendDiscordNotifications, 'boolean');
+        this.validateRequiredProperty('maxItemsPerFeed', maxItemsPerFeed, 'number', { min: 1 });
     }
 
     validateRequiredProperty(name, value, type, options = {}) {
@@ -341,44 +382,59 @@ class RSSFeedNotifier {
         if (fs.existsSync(this.config.processedStateFile)) {
             try {
                 const processedState = JSON.parse(fs.readFileSync(this.config.processedStateFile));
+                console.log('Loaded processed state from file');
+                logger.info('Loaded processed state from file');
                 return processedState;
             } catch (error) {
+                console.error('Error reading or parsing the processed state file:', error);
                 logger.error('Error reading or parsing the processed state file:', error);
                 return {};
             }
         }
+        console.log('No existing processed state file found. Starting fresh.');
+        logger.info('No existing processed state file found. Starting fresh.');
         return {};
     }
 
     saveProcessedState() {
         try {
-            fs.writeFileSync(this.config.processedStateFile, JSON.stringify(this.processedState));
+            fs.writeFileSync(this.config.processedStateFile, JSON.stringify(this.processedState, null, 2));
+            console.log(`Processed state saved to file: ${this.config.processedStateFile}`);
             logger.info(`Processed state saved to file: ${this.config.processedStateFile}`);
         } catch (error) {
+            console.error('Error writing the processed state to file:', error);
             logger.error('Error writing the processed state to file:', error);
         }
     }
 
     async checkFeedsAndNotify() {
-        logger.info('Checking RSS feeds...');
-        const feedPromises = this.config.feedUrls.map((url) => this.feedParser.parseFeed(url, this.processedState));
-        const feedResults = await Promise.all(feedPromises);
+        console.log('Checking RSS feeds...');
+        logger.info('Starting feed check');
+        const limit = pLimit(5); // Limit concurrency to 5 simultaneous requests
+        const feedPromises = this.config.feedUrls.map(url =>
+            limit(() => this.feedParser.parseFeed(url, this.processedState))
+        );
+        const feedResults = await Promise.allSettled(feedPromises);
 
         const newItems = [];
         const errorFeeds = [];
 
-        for (let i = 0; i < feedResults.length; i++) {
-            const result = feedResults[i];
-            const feedUrl = this.config.feedUrls[i];
-
-            if (result.hasError) {
-                errorFeeds.push(feedUrl);
+        feedResults.forEach((result, index) => {
+            if (result.status === 'fulfilled') {
+                if (result.value.hasError) {
+                    errorFeeds.push(this.config.feedUrls[index]);
+                } else {
+                    newItems.push(...result.value.items);
+                }
             } else {
-                newItems.push(...result.items);
+                errorFeeds.push(this.config.feedUrls[index]);
+                logger.error(`Error parsing feed: ${this.config.feedUrls[index]}`, result.reason);
             }
-        }
+        });
 
         if (errorFeeds.length > 0) {
+            console.log('Problematic feeds:');
+            errorFeeds.forEach(url => console.log(` - ${url}`));
             const errorMessage = 'One or more feeds encountered parsing errors.';
             const errorFeedUrls = errorFeeds.join('\n');
             await this.discordNotifier.sendErrorNotification(`${errorMessage}\nFeed URL(s):\n${errorFeedUrls}`);
@@ -386,26 +442,30 @@ class RSSFeedNotifier {
 
         if (newItems.length > 0) {
             await this.githubIntegration.commitUpdates(newItems, this.config.dataFile);
-            logger.info('Updates committed to GitHub repository');
+            console.log(`${newItems.length} new items found and committed to GitHub`);
 
             if (this.config.sendDiscordNotifications) {
+                console.log('Sending Discord notifications...');
                 const notificationPromises = newItems.map((item) => this.discordNotifier.sendNotification(item));
                 await Promise.all(notificationPromises);
+                console.log('Discord notifications sent');
             } else {
-                logger.info('Discord notifications are disabled.');
+                console.log('Discord notifications are disabled.');
             }
         } else {
-            logger.info('No new updates found.');
+            console.log('No new updates found.');
         }
 
         this.saveProcessedState();
-        logger.info('Feed checking and notification completed.');
+        console.log('Feed checking completed.');
+        logger.info(`Feed check completed. ${newItems.length} new items found.`);
     }
 
     async retrieveFeedUrlsFromGitHub() {
         try {
             this.config.feedUrls = await this.githubIntegration.retrieveFeedUrls(this.config.feedUrlsPath);
-            logger.info('Feed URLs retrieved from GitHub repository.');
+            console.log(`Retrieved ${this.config.feedUrls.length} feed URLs from GitHub`);
+            logger.info(`Retrieved ${this.config.feedUrls.length} feed URLs from GitHub`);
 
             // Update the processedState with the retrieved feedUrls
             for (const url of this.config.feedUrls) {
@@ -414,24 +474,37 @@ class RSSFeedNotifier {
                 }
             }
         } catch (error) {
+            console.log('Error retrieving feed URLs from GitHub');
             logger.error('Error retrieving feed URLs from GitHub repository:', error);
             process.exit(1);
         }
     }
 
     gracefulShutdown() {
-        logger.info('Received shutdown signal. Saving processed state and exiting...');
+        console.log('Shutting down...');
+        logger.info('Shutting down...');
         this.saveProcessedState();
         process.exit(0);
     }
 
     async start() {
+        console.log('Starting the RSS Feed Notifier...');
         logger.info('Starting the RSS Feed Notifier...');
         await this.retrieveFeedUrlsFromGitHub();
-        this.checkFeedsAndNotify();
+        try {
+            await this.checkFeedsAndNotify();
+        } catch (error) {
+            console.log('Error during initial feed check');
+            logger.error('Error during initial feed check:', error);
+        }
         setInterval(async () => {
             await this.retrieveFeedUrlsFromGitHub();
-            await this.checkFeedsAndNotify();
+            try {
+                await this.checkFeedsAndNotify();
+            } catch (error) {
+                console.log('Error during scheduled feed check');
+                logger.error('Error during scheduled feed check:', error);
+            }
         }, this.config.checkInterval);
         process.on('SIGINT', () => this.gracefulShutdown());
         process.on('SIGTERM', () => this.gracefulShutdown());

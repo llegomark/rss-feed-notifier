@@ -59,7 +59,8 @@ With its optimized code and carefully selected dependencies, the RSS Feed Notifi
      "maxRetries": 3,
      "retryDelay": 5000,
      "processedStateFile": "processed_state.json",
-     "dataFile": "data.csv"
+     "dataFile": "data.csv",
+     "maxItemsPerFeed": 100
    }
    ```
 
@@ -72,10 +73,62 @@ With its optimized code and carefully selected dependencies, the RSS Feed Notifi
    ]
    ```
 
-5. Run the application:
+## Running on Amazon AWS with PM2
+
+This application is designed to run on Amazon AWS using PM2 for process management. Follow these steps to set up and run the application:
+
+1. Install PM2 globally on your AWS instance:
    ```
-   node app.mjs
+   sudo npm install -g pm2
    ```
+
+2. Navigate to the project directory:
+   ```
+   cd /path/to/rss-feed-notifier
+   ```
+
+3. Start the application with PM2:
+   ```
+   pm2 start app.mjs --name "better-rss-feed-notifier"
+   ```
+
+4. Set up PM2 to start on system boot:
+   ```
+   pm2 startup systemd
+   ```
+   Follow the instructions provided by the command to complete the setup.
+
+5. Save the current PM2 process list:
+   ```
+   pm2 save
+   ```
+
+6. To view the application logs:
+   ```
+   pm2 logs better-rss-feed-notifier
+   ```
+
+7. To restart the application:
+   ```
+   pm2 restart better-rss-feed-notifier
+   ```
+
+8. To stop the application:
+   ```
+   pm2 stop better-rss-feed-notifier
+   ```
+
+## Changelog
+
+The following changes have been made to the `app.mjs` source code:
+
+- Implemented concurrent feed parsing with `p-limit` to improve performance
+- Added more robust error handling and logging
+- Improved the feed parsing process to handle various edge cases
+- Enhanced the GitHub integration to handle larger datasets more efficiently
+- Implemented a more comprehensive configuration validation system
+- Added support for a separate Discord webhook for error notifications
+- Improved the processed state management to be more resilient
 
 ## Configuration
 
@@ -93,6 +146,7 @@ The Better RSS Feed Notifier can be configured using the `config.json` file. Her
 - `retryDelay`: The delay in milliseconds between each retry attempt.
 - `processedStateFile`: The path to the JSON file storing the processed state of the feeds.
 - `dataFile`: The path to the CSV file where the feed data will be stored.
+- `maxItemsPerFeed`: The maximum number of items to process per feed.
 
 Make sure to replace the placeholders with your actual values.
 
